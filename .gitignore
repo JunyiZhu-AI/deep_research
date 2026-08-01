@@ -1,0 +1,18 @@
+# Run artifacts. A single run is 1-1.5 GB of PDFs and cached responses.
+# Never commit these.
+runs/*
+!runs/.gitkeep
+
+# Audit output from audit_manual.py
+audit/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

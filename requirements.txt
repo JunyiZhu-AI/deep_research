@@ -1,0 +1,16 @@
+# Required
+networkx>=3.0          # graph metrics, Louvain community detection
+
+# Strongly recommended — the run degrades without these
+pdfplumber>=0.10       # table extraction from results sections
+pypdf>=4.0             # fallback text extraction, form fields
+
+# Optional
+PyMuPDF>=1.23          # image extraction with position data
+pytesseract>=0.3       # OCR fallback for scanned PDFs
+
+# System packages (not pip):
+#   poppler-utils   -> pdftotext, pdffonts, pdfinfo, pdftoppm, pdfimages
+#   tesseract-ocr   -> OCR for scanned documents
+# Debian/Ubuntu:  sudo apt-get install poppler-utils tesseract-ocr
+# macOS:          brew install poppler tesseract
