@@ -142,6 +142,24 @@ def validate_card(cid, card, root, defects, strict_bib):
     elif not DATE_RE.match(str(fpd)):
         defects.add("card_bad_date", cid, f"first_preprint_date={fpd!r}")
 
+    # §7.2: external_citations is optional, but if asserted it must carry its
+    # provenance -- a count without source+retrieved is a number from memory.
+    ext = bib.get("external_citations")
+    if ext is not None:
+        if not isinstance(ext, dict):
+            defects.add("card_bad_external_citations", cid,
+                        f"external_citations must be an object or null, got {type(ext).__name__}")
+        else:
+            if not isinstance(ext.get("count"), int) or ext["count"] < 0:
+                defects.add("card_bad_external_citations", cid,
+                            f"external_citations.count={ext.get('count')!r} (need int >= 0)")
+            if not ext.get("source"):
+                defects.add("card_bad_external_citations", cid,
+                            "external_citations.source missing -- which endpoint said this?")
+            if not ext.get("retrieved"):
+                defects.add("card_bad_external_citations", cid,
+                            "external_citations.retrieved missing -- when was it fetched?")
+
     if strict_bib and depth == "full_text":
         # Cheap anti-fabrication check: the recorded title should appear in the
         # extracted text. Catches cards written from memory rather than the PDF.

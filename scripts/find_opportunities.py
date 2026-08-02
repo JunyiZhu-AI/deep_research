@@ -75,6 +75,27 @@ def tokens(text):
             if w not in STOP}
 
 
+# How much a card's claims can bear (MANUAL §11.3). Weighting orders the
+# prospector's attention; it never removes a candidate.
+STRENGTH_W = {"strong": 1.0, "moderate": 0.6, "weak": 0.3}
+EVIDENCE_W = {"benchmark": 1.0, "ablation": 1.0, "theory": 0.8, "anecdote": 0.4}
+
+
+def evidence_weight(card):
+    """Solidity of a card's claims, in (0, 1].
+
+    The strongest claim sets the level: a paper with one strong benchmark
+    result and three anecdotes is a solid source. A card with no scored
+    claims gets 0.5 -- unknown, not bad.
+    """
+    best = 0.0
+    for cl in (card or {}).get("claims", []) or []:
+        w = STRENGTH_W.get(cl.get("strength"), 0.3) * \
+            EVIDENCE_W.get(cl.get("evidence_type"), 0.6)
+        best = max(best, w)
+    return round(best, 3) if best > 0 else 0.5
+
+
 # --- detectors -------------------------------------------------------------
 
 def transfer_gaps(graph, cards, node_cluster, min_cluster, top_k=12):
@@ -178,8 +199,13 @@ def stale_threads(graph, node_cluster, cards, now_year, gap=4, top_k=10):
     return out[:top_k]
 
 
-def unresolved_disputes(graph, top_k=12):
-    """contradicts edges that no later node cites from both sides."""
+def unresolved_disputes(graph, cards, top_k=12):
+    """contradicts edges that no later node cites from both sides.
+
+    A dispute is only as real as its worst evidence: two strong-benchmark
+    papers contradicting each other is an experiment waiting to happen; two
+    anecdotes contradicting each other is noise. Weight by the weaker side.
+    """
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     cited_by = defaultdict(set)
     for e in graph.get("edges", []):
@@ -195,10 +221,12 @@ def unresolved_disputes(graph, top_k=12):
         later = {n for n in both
                  if (year((nodes.get(n) or {}).get("date")) or 0) > max(ya or 0, yb or 0)}
         if not later:
+            wa, wb = evidence_weight(cards.get(a)), evidence_weight(cards.get(b))
             out.append({
                 "type": "unresolved_dispute",
                 "nodes": [a, b], "dates": [ya, yb], "settling_papers": 0,
-                "score": 4.0,
+                "evidence_weights": [wa, wb],
+                "score": round(2.0 + 4.0 * min(wa, wb), 3),
                 "prospector_task": ("These two contradict each other and nothing later "
                                     "cites both. Falsify: has anyone resolved this "
                                     "empirically? If not, the resolving experiment is "
@@ -288,9 +316,9 @@ def evaluation_gaps(cards, top_k=10, min_points=4):
         if len(pts) < max(6, min_points):
             continue
         pts.sort()
-        split = len(pts) // 2
-        early = sum(v for _, v, _ in pts[:split]) / split
-        late = sum(v for _, v, _ in pts[split:]) / (len(pts) - split)
+        mid = len(pts) // 2
+        early = sum(v for _, v, _ in pts[:mid]) / mid
+        late = sum(v for _, v, _ in pts[mid:]) / (len(pts) - mid)
         gain = late - early
         if abs(gain) < 0.02 * max(abs(early), 1e-9):
             out.append({
@@ -318,6 +346,11 @@ def cluster_future_work(cards, node_cluster, min_support=3):
     eleven groups across four years and still unaddressed is the strongest
     opportunity evidence this run can produce -- and it only exists because
     every card carried its share.
+
+    Support is weighted by each distinct card's claim solidity (§11.3), so
+    eight groups blocked despite benchmark-grade evidence outrank eight
+    anecdotal mentions. The min_support gate stays on the raw count --
+    weighting reorders themes, it never suppresses one.
     """
     entries = []
     for cid, card in cards.items():
@@ -347,17 +380,20 @@ def cluster_future_work(cards, node_cluster, min_support=3):
         if len(bucket) >= min_support:
             years = [b["year"] for b in bucket if b["year"]]
             shared = set.intersection(*[b["tok"] for b in bucket]) or e["tok"]
+            nodes = {b["node"] for b in bucket}
+            weighted = sum(evidence_weight(cards.get(n)) for n in nodes)
             groups.append({
                 "theme": " / ".join(sorted(shared)[:6]),
                 "support": len(bucket),
-                "distinct_nodes": len({b["node"] for b in bucket}),
+                "distinct_nodes": len(nodes),
+                "weighted_support": round(weighted, 3),
                 "clusters": sorted({b["cluster"] for b in bucket if b["cluster"]}),
                 "year_span": [min(years), max(years)] if years else None,
                 "kind": "assumption" if any(b.get("kind") == "assumption" for b in bucket)
                         else "future_work",
                 "examples": [{"node": b["node"], "text": b["text"][:220]}
                              for b in bucket[:6]],
-                "score": round(len(bucket) * 1.2 +
+                "score": round(weighted * 1.2 +
                                ((max(years) - min(years)) * 0.4 if len(years) > 1 else 0), 3),
             })
     groups.sort(key=lambda g: -g["score"])
@@ -387,7 +423,7 @@ def main():
         transfer_gaps(graph, cards, node_cluster, args.min_cluster) +
         expired_blockers(cards) +
         stale_threads(graph, node_cluster, cards, ny) +
-        unresolved_disputes(graph) +
+        unresolved_disputes(graph, cards) +
         orphaned_artifacts(graph, cards, ny) +
         scaling_frontier(graph, cards, ny) +
         evaluation_gaps(cards)

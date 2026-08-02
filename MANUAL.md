@@ -459,7 +459,9 @@ Batch by *relatedness*, never by convenience. Fifteen papers from one thread rea
                  "depth": "full_text|abstract_only|ocr"},
   "bib": {"title": "...", "authors": ["..."], "venue": "...",
           "first_preprint_date": "2017-06-12", "publication_date": "2017-12-04",
-          "affiliations": ["..."]},
+          "affiliations": ["..."],
+          "external_citations": {"count": 141324, "source": "openalex|semanticscholar",
+                                 "retrieved": "2026-08-01T09:14:00Z"}},
   "problem": "<what problem, in your own words>",
   "mechanism": "<how it works, in your own words, precise enough to reimplement the core>",
   "assumptions": ["<stated and unstated>"],
@@ -488,6 +490,8 @@ Batch by *relatedness*, never by convenience. Fifteen papers from one thread rea
 ```
 
 `delta_question` and `per_component` are the two fields that make the novelty verdict possible. A card without them is incomplete and must be redone.
+
+`external_citations` is capability-gated evidence, not judgment. Fill it only when `state/capabilities.json` marks OpenAlex or Semantic Scholar `USABLE`, from that endpoint's response for this specific paper, recording which endpoint and when. If neither endpoint is usable, set it to `null` — never estimate a count from memory; an asserted citation count is a fabricated number like any other (§1.4). The count feeds discovery priority (§10) and the prospector's solidity weighting (§11.3). **It is never a filter.** No paper is excluded from the graph, dropped from the frontier, or scored a lower `threat_level` because its count is low — prior art anticipates by existing, not by being cited. An obscure workshop paper that anticipates the idea is precisely the find the run exists to make.
 
 `future_work_stated`, `blocked_by`, and `unexamined_assumption` are the fields that make the **opportunity map** possible (§11.2). Fill them on every card even when they feel low-value in isolation — their worth is entirely in aggregate. A single paper's future-work section is boilerplate; the same limitation named independently by eleven groups over four years, still unaddressed, is the strongest opportunity signal available to this run, and it only exists if every card carried its share. Anchor `future_work_stated` to the paper's own words, and set `blocked_by[].still_holds` to false whenever a later node in the graph removes the obstacle — that pairing is what produces an `expired_blocker`.
 
@@ -603,6 +607,8 @@ priority = 3.0*threat_potential
          - 2.0*redundancy_with_corpus
 ```
 
+`centrality_of_source` has a cold-start problem: in-corpus PageRank is meaningless before the graph reaches roughly 100 nodes, which is exactly when the run decides which threads to invest in. Until then, when `bib.external_citations` is available (§7.2), use `min(1.0, log10(count+1)/5)` in its place; once the graph is large enough, in-corpus centrality takes over — it reflects this problem's neighborhood rather than global fame. External counts influence *which paper is read next* and nothing else: never use them to skip a paper, cap a threat level, or shorten digestion.
+
 Dispatch the top 10 each round, **but reserve at least 2 of the 10 slots for the lowest-scoring non-zero items** — a pure-greedy frontier collapses into one cluster and is the most common way long research runs fail. Reserve 1 slot every round for a §6 strategy that has been used least.
 
 When you decline to expand an item, write the reason to `state/round_XX/declined.jsonl`. Declining without a logged reason is a banned behavior.
@@ -656,6 +662,8 @@ Opportunities are typed. An untyped "this seems promising" is rejected at merge.
 | `accelerating_thread` | A compounding area the idea could ride | Steep node-count growth per 6-month bin |
 
 **Mining stated future work is the highest-yield single source here, and nobody does it by hand.** Across 300 papers you have 300 authors' own statements about what they could not do and why. Cluster them: a limitation named independently by eleven groups across four years, still unaddressed, is a far stronger signal than anything you would infer unaided. Extract these into card fields `future_work_stated`, `blocked_by`, and `unexamined_assumption` (§7.2) and have the prospector cluster them every round it runs.
+
+**Support is weighted by solidity, not just counted.** `find_opportunities.py` weights each supporting card by its `claims[].strength` × `evidence_type` (§7.2), so a limitation hit by eight groups with benchmark evidence outranks the same limitation named in eight anecdotal preprints; `unresolved_dispute` candidates are likewise weighted by the weaker side of the contradiction, since a dispute is only as real as its worst evidence. The raw support count is always preserved alongside the weighted score. Weighting orders the prospector's attention; it never deletes a candidate — this is the one place source solidity legitimately matters, and the red team's prior-art hunt is not it.
 
 ### 11.4 Opportunity record — `opportunities/opportunities.jsonl`
 
@@ -1269,7 +1277,7 @@ python3 scripts/audit_manual.py --manual MANUAL.md --scripts scripts/
 
 **Validator severity.** Defect kinds prefixed `info_` are surfaced but non-blocking. Everything else blocks. Do not "fix" a blocking defect by deleting the node — fix the evidence, or demote the claim.
 
-**What `find_opportunities.py` is and is not.** It emits `opportunities/candidates.json` — structural signatures where openings tend to live: thread pairs sharing problem vocabulary with no citation contact, contradictions nothing later settles, benchmarks that stopped moving, central old results with no recent follow-up, artifacts nobody built on, obstacles a card marked as lifted. **Every candidate arrives with `status: needs_why_now_and_falsifier` and is not an opportunity until a prospector worker supplies both.** The script finds where to look; it cannot tell you whether anything is there.
+**What `find_opportunities.py` is and is not.** It emits `opportunities/candidates.json` — structural signatures where openings tend to live: thread pairs sharing problem vocabulary with no citation contact, contradictions nothing later settles, benchmarks that stopped moving, central old results with no recent follow-up, artifacts nobody built on, obstacles a card marked as lifted. Candidates that rest on card claims are ranked by evidence solidity — `claims[].strength` × `evidence_type` per supporting card (§11.3) — never filtered by it; raw support counts are kept beside the weighted scores. **Every candidate arrives with `status: needs_why_now_and_falsifier` and is not an opportunity until a prospector worker supplies both.** The script finds where to look; it cannot tell you whether anything is there.
 
 It also writes `future_work_clusters.json`, grouping author-stated limitations by shared vocabulary. Read the support count and year span together: a theme with support 40 across two years is a fashion, while support 12 across nine years is a standing open problem — the second is worth far more. The clustering deliberately **under-merges** near-paraphrases rather than over-merging, since two adjacent themes cost the prospector a few minutes of reading while a wrongly-merged theme silently destroys the signal. Expect to see the same gap split across two entries and treat them as one.
 
