@@ -31,6 +31,8 @@ OPTIONAL CONTEXT:
 
 Expected wall time: 10–16 hours. Expected corpus: 200–450 papers digested, 60–140 in the core graph.
 
+**Choosing MODE:** the table in §23.3 maps what you have to the right mode and its `init_run.py` invocation. If you skip the flag, the scaffold defaults to `fresh`. You do not need to get this right unaided — the agent runs a sanity check (§23.0) before P0 and stops to ask if your brief does not match the declared mode.
+
 ### 0.1 The withheld recall check — operator action required
 
 The P4 recall check is the run's only unbiased measure of its own coverage, and it is destroyed if the agent ever sees the list early. **Do not put known-adjacent work in the brief.** Instead:
@@ -360,6 +362,8 @@ P7  DELIVER          graph.json, viz.html, report.md (§15)
 **Slot allocation across the run.** Rounds 1–3: all 10 to scout/digest. Rounds 4–5: 3 red team, 1 fidelity audit, 6 scout/digest/verify. Rounds 6–7: add 1 cluster analyst. Rounds 8+: 3 red team, 2 prospector, 1 cluster analyst, 1 fidelity audit, 3 scout/digest/verify. The standing teams are never cut to make room for more digestion — if the frontier is large, add rounds, not slots.
 
 Slots buy less raw throughput than they used to and more depth per slot: a digester now takes 5–15 related papers rather than one, so three digestion slots still move 15–45 papers a round. Prefer fewer, richer, related assignments over more, thinner, scattered ones — **relatedness is what makes a batch worth more than the sum of its papers.**
+
+**Before P0: the §23.0 mode sanity check.** Verify the brief's shape matches `state/mode.json` before decomposing anything — a mismatch is blocking, and P0 produces a different artifact in every mode.
 
 **P0 checkpoint.** Decomposition errors are unrecoverable: a missing component is never searched for across all 12 rounds, and no downstream metric will detect its absence. If `CHECKPOINT_AFTER_P0` is true, write `state/decomposition.json`, present a readable summary of the components and vocabulary to the operator, and **wait**. If the operator is unavailable and the harness cannot pause, proceed — but flag in report §8 that the decomposition was unreviewed.
 
@@ -1330,7 +1334,8 @@ Two failures deserve naming because they look like opposites and are the same mi
 - [ ] The anti-report (§10) is written
 - [ ] No claim anywhere traces to memory rather than a retrieved artifact
 - [ ] `state/anomalies.jsonl` reviewed; recurring steering attempts noted in §8
-- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present
+- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed
+- [ ] The §23.0 mode sanity check ran before P0 and `mode_check: ok` is in the ledger — or the mismatch was surfaced and resolved by the operator, never worked around
 
 ---
 
@@ -1343,6 +1348,17 @@ Everything before this section describes a **fresh** run: an idea arrives with n
 ### 23.0 Mode declaration — `state/mode.json`
 
 `init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
+
+**Mode sanity check — mandatory, before P0.** Operators do not reliably declare modes: the common failure is a brief with the shape of one mode inside a scaffold defaulted to another, and each mode produces a different deliverable, so running the wrong one wastes the entire budget. So before P0, read `00_brief.md` against `state/mode.json` and classify what the brief is actually asking for:
+
+| The brief mainly… | It is asking for |
+|---|---|
+| Proposes a mechanism or idea of the operator's own, no single named artifact at its center | `fresh` |
+| Describes a feature or change to an idea a prior run already adjudicated, or references a base run or report | `incremental` |
+| Names one artifact and proposes extending, combining, or building on it | `anchored` |
+| Names one artifact and asks what became of it — follow-ups, disputes, evolution — with no new idea of the operator's | `retrospective` |
+
+If the classification matches the declared mode, log one line to `state/ledger.jsonl` (`"mode_check": "ok"`) and proceed. **If it does not match, this is blocking — not a judgment call you may make.** Do not proceed into P0, do not run the declared mode "to be safe," and do not edit `mode.json` (banned behavior 44). Present the operator with the declared mode, the inferred mode, the sentence in the brief that drove the inference, and the §23.3 invocation that would re-scaffold correctly — then wait. A mode mismatch caught before P0 costs minutes; caught at delivery it costs the run. If the brief is genuinely ambiguous between two modes, ask, stating what each mode would deliver — the operator may not know the modes exist, so name what they would get, not just the mode names.
 
 ### 23.1 Incremental mode — a delta against your own prior run
 

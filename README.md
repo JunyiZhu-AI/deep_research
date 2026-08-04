@@ -12,10 +12,15 @@ ten or more hours on it, and come back with an honest answer to two questions.
 Read **[`MANUAL.md`](MANUAL.md)** in full before you do anything else. All of
 it. It is the authoritative instruction set; this README is only the map.
 
-You will be given an idea. Your job is to run the process in MANUAL.md against
-it and produce three files: `out/report.md`, `out/graph.json`, `out/viz.html`.
+You will be given an idea — or, depending on the run's mode, a feature to add,
+an anchor artifact to follow up, or a past paper to run a retrospective on.
+**Read `state/mode.json` first** and run the MANUAL §23.0 sanity check: the
+mode changes what P0 produces, which gates hold you, and what the report is.
+If the brief does not match the declared mode, stop and ask — operators
+misdeclare modes more often than they misdescribe their ideas. Then produce
+three files: `out/report.md`, `out/graph.json`, `out/viz.html`.
 
-Six things matter more than the rest. If you remember nothing else from this
+Eight things matter more than the rest. If you remember nothing else from this
 page, remember these.
 
 **1. Token spend is not a cost.** The operator has unlimited budget and has
