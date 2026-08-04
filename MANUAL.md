@@ -13,7 +13,7 @@ Fill in the capability map in §2, then issue:
 Execute DEEP RESEARCH OPERATING MANUAL v1.2.
 
 RUN_ROOT: ./runs/<slug>
-MODE: fresh                        # or incremental / anchored — §23; must match state/mode.json
+MODE: fresh                        # or incremental / anchored / retrospective — §23; must match state/mode.json
 MAX_CONCURRENCY: 10
 MIN_ROUNDS: 12
 MIN_DIGESTED: 200
@@ -794,7 +794,7 @@ Three of these gates were, in v1.1, satisfiable by doing *less* work. They are n
 
 **Fail-closed:** a metric that cannot be computed counts as failed. **All twelve must pass.** If any fails, the loop continues — and the failing metric determines the next round's assignment mix.
 
-**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added. The rescaled values are in §23.1, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
+**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors. The values are in §23.1 and §23.4, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
 
 ---
 
@@ -907,7 +907,8 @@ Aim for legibility over density. If the core graph exceeds ~150 nodes, default t
 ```
 # <Idea name> — Novelty Adjudication and Literature Map
 
-## 0. Verdict  (one page, no hedging, readable standalone)
+## 0. Verdict  (one page, no hedging, readable standalone;
+                                  retrospective runs: the claim scoreboard — §23.4)
     - Component-wise novelty table
     - Aggregate verdict on load-bearing components + confidence
     - The 3 papers that matter most, and why
@@ -1098,6 +1099,8 @@ Violating any of these invalidates the run:
 42. Importing base-run query logs, card audits, or opportunity records to satisfy this run's gates, or reopening an inherited opportunity without re-searching its falsifier (§23.1).
 43. In an anchored run, treating the anchor's claims as ground truth instead of scoring them like any other card (§23.2).
 44. Editing `mode`, `base_run`, or the floors in `state/mode.json` (§23.0).
+45. In a retrospective run, recording a claim fate without its minimum evidence on disk, or marking a claim `ignored` without the logged claim-check searches (§23.4).
+46. Excluding, discounting, or leaving untriaged a source that disputes a claim because of its citation count, venue, or affiliation — reliability orders reading and sets corroboration thresholds; it never censors (§23.4).
 
 ---
 
@@ -1333,13 +1336,13 @@ Two failures deserve naming because they look like opposites and are the same mi
 
 ## 23. RUN MODES — FRESH, INCREMENTAL, ANCHORED
 
-Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Two other modes exist. Both are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. The machinery is shared because the shape is shared.
+Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Three other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since.
 
 **Modes change scope, never rigor.** The fabrication firewall, the sealed recall check, the two teams, the banned behaviors, §16 readability, and fail-closed gate computation apply identically in every mode. A mode is a scoping of *what* is adjudicated, never a discount on *how*.
 
 ### 23.0 Mode declaration — `state/mode.json`
 
-`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
+`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
 
 ### 23.1 Incremental mode — a delta against your own prior run
 
@@ -1399,5 +1402,66 @@ The operator supplies an anchor — a paper, repository, tech report, or thesis 
 | An idea and nothing else | fresh | `init_run.py --slug x` |
 | A completed run + a new feature on the same idea | incremental | `init_run.py --slug x-delta --base-run runs/x` |
 | A specific paper/repo + a follow-up idea to it | anchored | `init_run.py --slug x --anchor <url> [--anchor-kind repo]` |
+| A past paper and the question "what happened to it?" | retrospective | `init_run.py --slug x-retro --subject <url>` |
 
 A feature large enough to change the idea's load-bearing components is not an increment — it is a new idea that happens to share a corpus. If more than half the base's load-bearing components would need re-adjudication, run fresh: `init_run.py --slug x2 --base-run runs/x --seed-only` imports the corpus as ordinary seed material but keeps `mode: fresh` and the full floors. Say so in the brief.
+
+### 23.4 Retrospective mode — what happened to this paper?
+
+The operator supplies one past paper — the **subject** — and no idea. The run answers: what are all its follow-up works and their follow-ups to date, what related work grew beside it, and — claim by claim — **what held, what was disputed or overturned, what was developed further, what spawned variants, what was repurposed, what was abandoned, and what was simply never engaged.** There is no novelty verdict. The evolution analysis (§14) is the centerpiece, not a supporting section, and the deliverable's §0 is a claim scoreboard.
+
+Full fresh floors apply (12 rounds, 200 papers, all §12 gates except as re-mandated below). A well-cited subject's descent tree alone exceeds them.
+
+**P0 — subject dossier, then claim decomposition.** Digest the subject first, at full depth, references fully parsed; record its card ID in `mode.json` `subject.card_id`. Then run the §5 ensemble with an inverted product: 10 workers independently extract the subject's **claims** — merge by union. Each claim: `{"id": "CL1", "kind": "theoretical|empirical|methodological|scope", "statement": "<one precise sentence>", "anchor": "<=15 words verbatim from the subject>", "is_load_bearing": true}`. Write the claim list into `state/decomposition.json` AND the claim IDs into `mode.json` `claims`. Claims are this mode's components: every card scores `per_component` against claim IDs, `component_coverage` requires ≥5 full-text cards engaging each claim, and the viz's novelty overlay becomes a claim-lineage overlay for free. The P0 checkpoint applies — a missed claim is never tracked.
+
+**The descent protocol — stratified, ledgered, gate-backed.** Transitive citation descent from a cited paper explodes; unbounded it is unfinishable, and casually sampled it is unfalsifiable. So it is stratified by generation and written down:
+
+- **Generation 1** is every work directly citing the subject (via the §2.3 forward-citation methods; the scholarly endpoints make this far stronger — probe them). Write every one to `state/descent/generation_1.jsonl`: `{"title", "url", "year", "external_citations", "triage": "digested|periphery|irrelevant", "card_id", "note"}`. **Every generation-1 row must be triaged** — read at least to the point of knowing whether it engages the subject or merely cites it in passing. `periphery` (cites in passing) and `irrelevant` need one line of `note`; `digested` needs a card.
+- **Generation 2+**: citers of *influential* descendants (high reliability, or any card that disputes/develops a claim), same ledger files (`generation_2.jsonl`, …). Descend until a generation adds no new claim-fate evidence — that emptiness is logged, not assumed.
+- **Siblings**: related works that do *not* cite the subject, found by problem-first and adjacent-field strategies (§6). These are the counterfactual lineage — what the field did without the subject — and the source of `reinvents` edges.
+- Log every descent query with `role: "descent"`.
+
+**Source reliability — weighting, never censorship.** Descent triage order, fate-evidence weight, and the overturn threshold all use a computed per-card reliability score:
+
+```
+reliability = 0.40 * evidence_strength      # best claim: strength × evidence_type (§11.3)
+            + 0.30 * citation_signal        # min(1, log10(external_citations+1)/5); 0.3 if null
+            + 0.15 * venue_signal           # peer-reviewed 1.0 · preprint 0.5 · repo/blog 0.35
+            + 0.15 * author_presence        # author appears on ≥2 other corpus nodes
+```
+
+Affiliation and venue prestige may additionally order your *reading queue* — read the heavily-resourced lab's rebuttal before the anonymous preprint's. But the score has deliberately capped weights for everything except evidence, and **no reliability value excludes a source, caps a dispute, or silences a contradiction**: a correct refutation from an unknown author at a workshop is still a refutation, and this harness exists to find exactly those. Reliability decides what you read first and how much corroboration a strong verdict needs — never what exists.
+
+**Claim fates — the taxonomy.** Every claim gets exactly one current fate in `state/claim_fates.json`, each with evidence anchors and a timeline (fates move — record when):
+
+| Fate | Meaning | Minimum evidence |
+|---|---|---|
+| `held` | Retested or independently confirmed, not merely repeated | ≥1 confirming card |
+| `disputed` | Contradicted; the dispute is live | ≥1 contradicting card |
+| `overturned` | Contradicted and the field's consensus moved | ≥2 contradicting cards, or 1 with reliability ≥ 0.75 |
+| `developed` | Extended, strengthened, generalized | ≥1 `builds_on` card |
+| `varied` | Spawned distinct variants of the mechanism | ≥1 variant card |
+| `repurposed` | Carried to a problem the subject never intended | ≥1 card applying it elsewhere |
+| `abandoned` | The field dropped this direction — record the stated reason | ≥1 card or a dated activity cliff |
+| `ignored` | No descendant engages it | proof of search, see below |
+
+```json
+{"CL2": {"fate": "overturned", "confidence": 0.8,
+  "timeline": [{"year": 2019, "event": "confirmed at small scale", "node": "x2019y"},
+               {"year": 2022, "event": "failed to replicate at scale", "node": "z2022w"}],
+  "evidence": [{"node": "z2022w", "relation": "contradicts", "anchor": "<=15 words"}],
+  "independent_lineage": ["nodes that developed this without citing the subject"],
+  "note": "<one sentence a reader can act on>"}}
+```
+
+Two hard rules. **`ignored` requires proof of search, not absence of evidence**: ≥5 distinct queries logged with `role: "claim_check"` and a `claim` field naming the claim ID. Undisputed-because-solid and undisputed-because-unread are different findings, and only searching distinguishes them. **`overturned` is the strongest statement this mode can make** and carries the reliability threshold above — one weak paper can dispute, it cannot overturn.
+
+A claim fate is one judgment over hundreds of cards — the same shape as P5 adjudication, with the same failure mode. **Load-bearing claims therefore get the §13.1 treatment**: three independent fate passes, disagreements reported with the artifact they disagree about, never averaged. Non-load-bearing claims may be single-passed.
+
+**Independent lineages are first-class.** When a claim's development happened *without citing the subject* — detected via sibling search plus `reinvents` entity resolution (§9.1) — record those nodes in the fate's `independent_lineage`. The scoreboard then distinguishes influence from parallel discovery: "developed, largely independently" is a very different finding from "developed, by this paper's descendants," and conflating them overstates the subject's role in its own story.
+
+**The red team's mandate inverts to scoreboard adversary.** Same slots, same `redteam_null` gate mechanics, new objective: *prove the scoreboard wrong.* Find the missed dispute, the missed variant, the negative result, the independent lineage the descent tree cannot see (it hunts outside citation space by construction — non-citing siblings, non-English descendants, industrial deployments that cite nothing). `threat_level` reads as "scoreboard-changing evidence"; `which_component` is the claim ID. The gate cannot pass until two verified-null rounds confirm the fates are stable under assault.
+
+**Gates.** All §12 gates apply with claims as components, plus two mode gates, both fail-closed: `descent_coverage` — subject digested at full depth, every generation-1 row triaged (≥95%), every `digested` row's card on disk, ≥15 distinct `role: "descent"` queries; `claim_coverage` — `mode.json` `claims` non-empty, every claim carries a fate with its minimum evidence on disk, `ignored` fates carry their claim-check queries. The prospector runs unchanged from round 8 — its question sharpens to "where is this lineage open today": the unsettled disputes, the variants never combined, the claims never retested at current scale, each with `why_now` and a searched falsifier.
+
+**The report reinterprets its sections; the numbers and validators stay.** §0 is the **claim scoreboard**: a table — claim, fate, deciding papers, dates — followed by one plain statement of whether the subject is still load-bearing today, which claims a reader should no longer trust, and (from the prospector) the strongest opening its lineage offers. Still ≤600 words, still no subsections. §1 the subject and its claims as decomposed; §2 claim adjudication — per-claim prose with fate, timeline, evidence anchors, and independent lineages; §3 the deepest dispute and its resolution state; §4 the torchbearers — who actively carries this lineage today, with dates; §5–§10 as in §15.3, with §6 (evolution) carrying the technique-evolution narrative the mode exists for. The sealed recall check holds follow-ups the operator already knows; a P4 miss lowers every fate confidence, same linkage as §13.2.

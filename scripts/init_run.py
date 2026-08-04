@@ -30,6 +30,9 @@ graph_metrics.py, round.py, and validate_report.py read:
 
     # anchored: follow-up idea to a named artifact
     python3 scripts/init_run.py --slug follow-up --anchor https://arxiv.org/abs/xxxx --anchor-kind paper
+
+    # retrospective: what happened to this paper — claims, descent, evolution
+    python3 scripts/init_run.py --slug attention-retro --subject https://arxiv.org/abs/1706.03762
 """
 
 import argparse
@@ -293,11 +296,15 @@ def main():
                     help="URL of the anchor artifact; sets mode: anchored "
                          "(MANUAL §23.2)")
     ap.add_argument("--anchor-kind", default="paper", choices=ANCHOR_KINDS)
+    ap.add_argument("--subject", default=None,
+                    help="URL of the paper to run a retrospective on; sets "
+                         "mode: retrospective (MANUAL §23.4)")
+    ap.add_argument("--subject-kind", default="paper", choices=ANCHOR_KINDS)
     args = ap.parse_args()
 
-    if args.base_run and args.anchor:
-        sys.exit("[init] --base-run and --anchor are mutually exclusive; "
-                 "pick one mode (MANUAL §23.3).")
+    if sum(bool(x) for x in (args.base_run, args.anchor, args.subject)) > 1:
+        sys.exit("[init] --base-run, --anchor, and --subject are mutually "
+                 "exclusive; pick one mode (MANUAL §23.3).")
     if args.seed_only and not args.base_run:
         sys.exit("[init] --seed-only requires --base-run.")
     if args.base_run and not os.path.isdir(args.base_run):
@@ -347,6 +354,18 @@ def main():
             "note": "Agent fills anchor.card_id after the anchor dossier "
                     "(MANUAL §23.2). mode is operator-owned (§23.0).",
         }
+    elif args.subject:
+        mode_doc = {
+            "mode": "retrospective",
+            "declared": now,
+            "subject": {"ref": args.subject, "kind": args.subject_kind,
+                        "card_id": None},
+            "claims": [],
+            "note": "Agent fills subject.card_id after the subject dossier and "
+                    "claims after P0 (MANUAL §23.4). mode is operator-owned "
+                    "(§23.0).",
+        }
+        os.makedirs(os.path.join(run, "state", "descent"), exist_ok=True)
     else:
         mode_doc = {"mode": "fresh", "declared": now}
         if args.seed_only:
@@ -473,10 +492,13 @@ def main():
     brief_what = {
         "incremental": "the FEATURE being added (not the base idea)",
         "anchored": f"the follow-up idea to the anchor ({args.anchor})",
+        "retrospective": f"any context on the subject ({args.subject}) — "
+                         "the paper itself is the brief",
     }.get(mode, "the idea")
     sealed_what = {
         "incremental": "prior art you know about the FEATURE",
         "anchored": "prior art you know about the FOLLOW-UP",
+        "retrospective": "follow-up works you already know about",
     }.get(mode, "prior art you already know")
     print(f"""
 Mode: {mode}  (state/mode.json — MANUAL §23)
@@ -503,6 +525,18 @@ Anchored specifics (MANUAL §23.2):
     state/mode.json anchor.card_id.
   - The anchor_coverage gate fails until its forward citations are swept
     (role: "anchor_forward").""")
+    elif mode == "retrospective":
+        print("""
+Retrospective specifics (MANUAL §23.4):
+  - Digest the subject FIRST, full depth; record its card id in
+    state/mode.json subject.card_id.
+  - P0 extracts the subject's CLAIMS (ensemble, union-merged); list their
+    IDs in state/mode.json claims. Claims are this mode's components.
+  - The descent_coverage gate fails until every generation-1 citer is
+    triaged in state/descent/generation_1.jsonl (role: "descent").
+  - The claim_coverage gate fails until every claim has an evidence-backed
+    fate in state/claim_fates.json. 'ignored' needs logged claim_check
+    searches; 'overturned' needs corroboration (MANUAL §23.4).""")
     print()
     return 1 if missing_crit else 0
 

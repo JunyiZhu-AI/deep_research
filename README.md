@@ -155,6 +155,16 @@ python3 scripts/init_run.py --slug my-idea-delta --base-run runs/my-idea
 # seeded from the anchor: its forward citations are the red team's primary
 # hunting ground, and the report assesses how solid the anchor itself is.
 python3 scripts/init_run.py --slug follow-up --anchor https://arxiv.org/abs/XXXX
+
+# retrospective: no idea at all — a past paper is the subject. Maps its full
+# descent tree (follow-ups and their follow-ups, generation by generation),
+# the siblings that never cited it, and adjudicates each of its claims to a
+# fate: held / disputed / overturned / developed / varied / repurposed /
+# abandoned / ignored. The verdict page is a claim scoreboard; the evolution
+# analysis is the centerpiece. Sources are reliability-weighted (evidence
+# strength, citations, venue, author standing) for reading order and
+# corroboration thresholds — never for exclusion.
+python3 scripts/init_run.py --slug attention-retro --subject https://arxiv.org/abs/1706.03762
 ```
 
 ---

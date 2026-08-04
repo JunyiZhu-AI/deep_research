@@ -33,3 +33,9 @@ decomposition — and do not name papers about the feature.
 Anchored (`--anchor`): describe the follow-up idea relative to the anchor. The
 anchor is the one artifact you may name; naming any other related work biases
 the search, same as above.
+
+Retrospective (`--subject`): the subject paper IS the brief — you may leave
+this file nearly empty. Add only scope constraints (e.g., "focus on the
+efficiency claims", "descend no earlier than 2020"). Do NOT list follow-up
+works you know — those go in the sealed file, where they become the coverage
+check.

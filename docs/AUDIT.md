@@ -371,3 +371,20 @@ in it is load-bearing in a way an ordinary README's is not.
   measurement.** No incremental run has been executed. Calibrate the same way
   §0.3 calibrates a fresh run: add a feature whose prior art you already know
   to a completed calibration run, and check the delta red team finds it.
+- **The §23.4 reliability weights (0.40/0.30/0.15/0.15) are hand-set and
+  uncalibrated**, and the venue signal is a crude binary (published vs not).
+  Affiliation was deliberately left out of the computed score — a hardcoded
+  prestige list is a filter that fails exactly where this harness hunts — and
+  demoted to a qualitative reading-order tiebreaker; if that was the wrong
+  call, the place to revisit it is `reliability()` in graph_metrics.py, not
+  the fate thresholds.
+- **Descent triage is self-reported per row.** The gate cross-checks that
+  `digested` rows have cards on disk, but a row marked `irrelevant` is
+  trusted. The card-fidelity audit does not currently sample triage verdicts;
+  a spot-audit of `irrelevant`/`periphery` rows would close this the same way
+  §12.2 closes hollow cards.
+- **A claim fate is one judgment over many cards** — the same shape as the P5
+  adjudication risk. §23.4 mandates the §13.1 triple-pass for load-bearing
+  claims, but nothing mechanical verifies the three passes were independent
+  or happened at all — the same enforcement gap R1 documented for §13.1
+  itself.

@@ -265,12 +265,13 @@ def check_completeness(md, sections, root, d):
         d.add("no_anti_report", "§10", "'What would make this report wrong' missing")
 
     # §23 mode-conditional subsections
-    mode = "fresh"
+    mode, mode_doc = "fresh", {}
     mode_path = os.path.join(root, "state", "mode.json")
     if os.path.exists(mode_path):
         try:
             with open(mode_path, encoding="utf-8") as fh:
-                mode = json.load(fh).get("mode", "fresh")
+                mode_doc = json.load(fh)
+            mode = mode_doc.get("mode", "fresh")
         except (json.JSONDecodeError, OSError):
             pass
     if mode == "incremental":
@@ -285,6 +286,18 @@ def check_completeness(md, sections, root, d):
                             "anchored runs must assess which anchor claims the "
                             "follow-up load-bears on and how strong each is "
                             "(§23.2)", d)
+    elif mode == "retrospective":
+        # §23.4 — §0 is the claim scoreboard: a table carrying every claim.
+        body = sections.get(0, ("", ""))[1]
+        if not re.search(r"^\s*\|.*\|", body, re.M):
+            d.add("scoreboard_missing", "§0",
+                  "retrospective §0 must contain the claim scoreboard table "
+                  "(claim | fate | deciding papers | dates) — §23.4")
+        for cl in mode_doc.get("claims") or []:
+            if cl not in body:
+                d.add("claim_not_in_scoreboard", cl,
+                      "claim absent from the §0 scoreboard — every claim's "
+                      "fate is the verdict (§23.4)")
 
 
 def main():

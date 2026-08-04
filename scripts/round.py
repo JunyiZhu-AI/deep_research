@@ -161,7 +161,8 @@ def main():
         try:
             with open(mode_path, encoding="utf-8") as fh:
                 doc = json.load(fh)
-            if doc.get("mode") in ("fresh", "incremental", "anchored"):
+            if doc.get("mode") in ("fresh", "incremental", "anchored",
+                                   "retrospective"):
                 mode = doc["mode"]
                 floors = doc.get("floors") or {}
         except json.JSONDecodeError:

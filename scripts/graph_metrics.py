@@ -59,6 +59,18 @@ PROSPECTOR_START_ROUND = 8
 REFRESH_QUERIES_MIN = 10      # distinct role:"refresh" queries (incremental)
 ANCHOR_QUERIES_MIN = 10       # distinct role:"anchor_forward" queries (anchored)
 
+# §23.4 retrospective mode.
+DESCENT_QUERIES_MIN = 15      # distinct role:"descent" queries
+DESCENT_TRIAGE_MIN = 0.95     # fraction of generation-1 rows triaged
+CLAIM_CHECK_QUERIES_MIN = 5   # per-claim proof of search for an `ignored` fate
+OVERTURN_RELIABILITY_MIN = 0.75
+CLAIM_FATES = {"held", "disputed", "overturned", "developed", "varied",
+               "repurposed", "abandoned", "ignored"}
+
+# §23.4 reliability inputs (weighting, never censorship — banned behavior 46).
+STRENGTH_W = {"strong": 1.0, "moderate": 0.6, "weak": 0.3}
+EVIDENCE_W = {"benchmark": 1.0, "ablation": 1.0, "theory": 0.8, "anecdote": 0.4}
+
 HIGH_CONSEQUENCE_EDGES = {
     "subsumes", "equivalent", "special_case_of", "reinvents", "contradicts",
 }
@@ -521,7 +533,8 @@ def opportunity_coverage(root, graph, current_round,
 def load_mode(root):
     """§23.0 — state/mode.json is the single source of truth; absent = fresh."""
     doc = read_json(os.path.join(root, "state", "mode.json"), {})
-    if doc.get("mode") not in ("fresh", "incremental", "anchored"):
+    if doc.get("mode") not in ("fresh", "incremental", "anchored",
+                               "retrospective"):
         return {"mode": "fresh"}
     return doc
 
@@ -572,6 +585,163 @@ def refresh_sweep(root):
               "refresh_queries": n_queries,
               "new_threats_found": doc.get("new_threats_found"),
               "problems": problems}
+    return not problems, detail
+
+
+def author_presence_counts(cards):
+    """How often each author appears across the corpus. A corpus-internal
+    standing signal: unbiased by any hardcoded prestige list, computable
+    offline, and it measures presence in THIS neighborhood, which is the
+    neighborhood that matters."""
+    counts = Counter()
+    for c in cards:
+        for a in (c.get("bib") or {}).get("authors", []) or []:
+            key = str(a).strip().lower()
+            if key:
+                counts[key] += 1
+    return counts
+
+
+def reliability(card, author_counts=None):
+    """§23.4 — per-card source reliability in (0, 1].
+
+    Orders descent triage and sets the corroboration bar for strong verdicts
+    (an `overturned` fate). NEVER used to exclude a source or silence a
+    dispute — banned behavior 46."""
+    best = 0.0
+    for cl in (card or {}).get("claims", []) or []:
+        w = STRENGTH_W.get(cl.get("strength"), 0.3) * \
+            EVIDENCE_W.get(cl.get("evidence_type"), 0.6)
+        best = max(best, w)
+    ev = best if best > 0 else 0.5
+
+    bib = (card or {}).get("bib") or {}
+    ext = bib.get("external_citations") or {}
+    count = ext.get("count")
+    cite = min(1.0, math.log10(count + 1) / 5) if isinstance(count, int) else 0.3
+
+    kind = (card or {}).get("artifact_kind")
+    if kind in ("repo", "blogpost"):
+        venue = 0.35
+    elif bib.get("venue") and bib.get("publication_date"):
+        venue = 1.0
+    else:
+        venue = 0.5
+
+    ap = 0.4
+    if author_counts:
+        if any(author_counts.get(str(a).strip().lower(), 0) >= 2
+               for a in bib.get("authors", []) or []):
+            ap = 1.0
+
+    return round(0.40 * ev + 0.30 * cite + 0.15 * venue + 0.15 * ap, 3)
+
+
+def descent_coverage(root, cards_by_id, mode_doc):
+    """§23.4 — the descent tree is ledgered, not sampled.
+
+    Every generation-1 citer triaged, every 'digested' row's card actually on
+    disk, and enough distinct descent queries to show the forward sweep
+    happened. Fail-closed like everything else."""
+    problems = []
+    subject = mode_doc.get("subject") or {}
+    card_id = subject.get("card_id")
+    if not card_id:
+        problems.append("subject.card_id not set in state/mode.json")
+    else:
+        card = cards_by_id.get(card_id)
+        if card is None:
+            problems.append(f"no card on disk for subject {card_id!r}")
+        elif (card.get("provenance") or {}).get("depth") != "full_text":
+            problems.append(f"subject card {card_id!r} is not full_text depth")
+
+    descent_dir = os.path.join(root, "state", "descent")
+    gen1 = read_jsonl(os.path.join(descent_dir, "generation_1.jsonl"))
+    generations = sorted(n for n in (os.listdir(descent_dir)
+                                     if os.path.isdir(descent_dir) else [])
+                         if n.startswith("generation_"))
+    if not gen1:
+        problems.append("state/descent/generation_1.jsonl missing or empty")
+        triaged_frac = 0.0
+    else:
+        triaged = [r for r in gen1
+                   if r.get("triage") in ("digested", "periphery", "irrelevant")]
+        triaged_frac = len(triaged) / len(gen1)
+        if triaged_frac < DESCENT_TRIAGE_MIN:
+            problems.append(f"only {triaged_frac:.0%} of generation-1 rows "
+                            f"triaged (need >={DESCENT_TRIAGE_MIN:.0%})")
+        undigested = [r for r in gen1 if r.get("triage") == "digested"
+                      and r.get("card_id") not in cards_by_id]
+        if undigested:
+            problems.append(f"{len(undigested)} generation-1 rows marked "
+                            "digested without a card on disk")
+
+    n_queries = distinct_role_queries(root, "descent")
+    if n_queries < DESCENT_QUERIES_MIN:
+        problems.append(f"{n_queries} distinct role:\"descent\" queries logged "
+                        f"(need {DESCENT_QUERIES_MIN})")
+
+    detail = {"subject_card": card_id, "generation_1_rows": len(gen1),
+              "triaged_fraction": round(triaged_frac, 3),
+              "generations_present": generations,
+              "descent_queries": n_queries, "problems": problems}
+    return not problems, detail
+
+
+def claim_coverage(root, cards_by_id, mode_doc, author_counts):
+    """§23.4 — every claim carries an evidence-backed fate.
+
+    `ignored` requires proof of search; `overturned` requires corroboration
+    scaled by source reliability. A fate the validator cannot trace to cards
+    on disk is an assertion, and assertions do not pass gates."""
+    problems = []
+    claims = mode_doc.get("claims") or []
+    fates = read_json(os.path.join(root, "state", "claim_fates.json"), {})
+    if not claims:
+        problems.append("mode.json claims is empty; fill it after P0")
+
+    per_claim_checks = defaultdict(set)
+    for q in read_jsonl(os.path.join(root, "state", "seen_queries.jsonl")):
+        if q.get("role") == "claim_check" and q.get("claim"):
+            key = (q.get("query") or "").strip().lower()
+            if key:
+                per_claim_checks[q["claim"]].add(key)
+
+    detail_claims = {}
+    for cl in claims:
+        f = fates.get(cl) or {}
+        fate = f.get("fate")
+        ev = [e for e in (f.get("evidence") or [])
+              if e.get("node") in cards_by_id]
+        if not fate:
+            problems.append(f"{cl}: no fate recorded in claim_fates.json")
+        elif fate not in CLAIM_FATES:
+            problems.append(f"{cl}: fate {fate!r} not in the §23.4 taxonomy")
+        elif fate == "ignored":
+            n = len(per_claim_checks.get(cl, set()))
+            if n < CLAIM_CHECK_QUERIES_MIN:
+                problems.append(f"{cl}: ignored with {n} distinct claim_check "
+                                f"queries (need {CLAIM_CHECK_QUERIES_MIN})")
+        elif fate == "overturned":
+            strong = [e for e in ev
+                      if reliability(cards_by_id[e["node"]], author_counts)
+                      >= OVERTURN_RELIABILITY_MIN]
+            if len(ev) < 2 and not strong:
+                problems.append(f"{cl}: overturned needs >=2 evidence cards, "
+                                f"or 1 with reliability >= "
+                                f"{OVERTURN_RELIABILITY_MIN} (has {len(ev)})")
+        elif fate == "abandoned":
+            if not ev and not f.get("timeline"):
+                problems.append(f"{cl}: abandoned needs evidence or a dated "
+                                "timeline entry")
+        else:
+            if not ev:
+                problems.append(f"{cl}: fate {fate!r} without evidence on disk")
+        detail_claims[cl] = {"fate": fate, "evidence_n": len(ev),
+                             "claim_checks": len(per_claim_checks.get(cl, set()))}
+
+    detail = {"claims": detail_claims, "fates_file_present": bool(fates),
+              "problems": problems[:12]}
     return not problems, detail
 
 
@@ -781,6 +951,21 @@ def main():
                                     "threshold": "anchor digested full_text + "
                                                  f">={ANCHOR_QUERIES_MIN} forward queries",
                                     "pass": ac_ok}
+    elif mode == "retrospective":
+        cards_by_id = {c.get("id"): c for c in cards if c.get("id")}
+        author_counts = author_presence_counts(cards)
+        dc_ok, dc_detail = descent_coverage(root, cards_by_id, mode_doc)
+        gates["descent_coverage"] = {"value": dc_detail,
+                                     "threshold": "subject full_text + gen-1 "
+                                                  f"triaged >={DESCENT_TRIAGE_MIN:.0%} + "
+                                                  f">={DESCENT_QUERIES_MIN} descent queries",
+                                     "pass": dc_ok}
+        cc_ok, cc_detail = claim_coverage(root, cards_by_id, mode_doc,
+                                          author_counts)
+        gates["claim_coverage"] = {"value": cc_detail,
+                                   "threshold": "every claim: evidence-backed "
+                                                "fate per §23.4 minimums",
+                                   "pass": cc_ok}
     all_pass = all(gate["pass"] for gate in gates.values())
 
     # --- guidance: the failing gate drives next round's assignment mix (§12)
@@ -821,6 +1006,14 @@ def main():
         guidance.append({"gate": "anchor_coverage",
                          "action": "sweep_anchor_forward_citations",
                          "targets": gates["anchor_coverage"]["value"]["problems"][:4]})
+    if "descent_coverage" in gates and not gates["descent_coverage"]["pass"]:
+        guidance.append({"gate": "descent_coverage",
+                         "action": "triage_descent_generation",
+                         "targets": gates["descent_coverage"]["value"]["problems"][:4]})
+    if "claim_coverage" in gates and not gates["claim_coverage"]["pass"]:
+        guidance.append({"gate": "claim_coverage",
+                         "action": "adjudicate_claim_fates",
+                         "targets": gates["claim_coverage"]["value"]["problems"][:4]})
 
     undigested_central = sorted(
         ({"id": n["id"], "pagerank": cent.get(n["id"], {}).get("pagerank", 0)}
