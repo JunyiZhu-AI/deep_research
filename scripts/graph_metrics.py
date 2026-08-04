@@ -23,6 +23,7 @@ components. No other third-party requirement.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -1072,9 +1073,21 @@ def main():
     }
     write_json(os.path.join(rounddir, "gate_summary.json"), compact)
 
+    # §0.1 tamper anchor: hash the sealed file WITHOUT reading its text.
+    # recall_check.py compares against the earliest recorded value at P4.
+    sealed_path = os.path.join(root, "SEALED_recall_check.md")
+    sealed_sha = None
+    if os.path.exists(sealed_path):
+        h = hashlib.sha256()
+        with open(sealed_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        sealed_sha = h.hexdigest()
+
     ledger_line = {
         "round": rnd,
         "mode": mode,
+        "sealed_sha256": sealed_sha,
         "ts": datetime.now(timezone.utc).isoformat(),
         "nodes_total": len(graph.get("nodes", [])),
         "nodes_core": len(core_nodes),

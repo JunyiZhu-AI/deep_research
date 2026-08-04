@@ -228,6 +228,11 @@ def main():
     else:
         hints = {}
 
+    # gate.json cannot know the validator result (it is computed separately),
+    # so its validator entry is always failing. Reconcile it here: this chain
+    # just ran validate_graph, and its exit code is the gate.
+    if vrc == 0:
+        failing = [f for f in failing if f != "validator"]
     ok = (vrc == 0 and not failing)
     print("\n" + "=" * 52)
     print(f"  round {rnd:02d}: " + ("ALL GATES PASS" if ok else "CONTINUE"))

@@ -101,6 +101,7 @@ scripts/
   graph_metrics.py     Centrality, clustering, all twelve saturation gates.
   validate_graph.py    Fabrication firewall. Exit 0 required before the report.
   validate_report.py   Delivery gate. Completeness against the graph + §16 readability.
+  recall_check.py      P4 unsealing tool. Computes the recall grade mechanically.
   find_opportunities.py Structural candidates for the prospector.
   render_viz.py         Builds the self-contained viz.html.
   audit_manual.py       Runs N independent audits of MANUAL.md via the API.
@@ -207,10 +208,15 @@ All three must exit 0.
 not open it until phase P4, near the end.
 
 This is the only unbiased measure of the run's own coverage. Everything else the
-run says about its thoroughness is the run grading itself. At P4 the agent opens
-the file and checks whether it found each item independently. Anything you knew
-that the search missed is a coverage failure — it gets reported, and it lowers
-the confidence of the entire verdict.
+run says about its thoroughness is the run grading itself. At P4 the agent runs
+`scripts/recall_check.py`, which grades the check mechanically rather than
+letting the agent self-grade: it refuses to open the file while gates are
+failing, matches every entry against the corpus by URL, arXiv id, and title,
+and writes the found/missed list to `state/recall_check.json`. The file's hash
+is anchored in the ledger from round 1, so a sealed list edited mid-run is
+visible. Anything you knew that the search missed is a coverage failure — the
+report validator blocks delivery unless every miss appears in §8 and lowers
+the confidence stated in §0.
 
 If the seal makes you uneasy, delete the file and paste the list yourself when
 the agent asks.

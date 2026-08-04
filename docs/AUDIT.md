@@ -388,3 +388,13 @@ in it is load-bearing in a way an ordinary README's is not.
   claims, but nothing mechanical verifies the three passes were independent
   or happened at all — the same enforcement gap R1 documented for §13.1
   itself.
+- **recall_check.py grades the seal mechanically, but its matcher can flatter
+  in both directions.** Title-token containment at 0.6 can call an item found
+  when the corpus merely holds a similarly-titled paper (overstating recall,
+  the dangerous direction) — the manual says verify found matches by eye, and
+  nothing enforces that. The hash anchor starts at round 1: edits before the
+  first `graph_metrics.py` run are invisible, and operator edits are
+  indistinguishable from agent edits — a changed hash is a flag to surface,
+  not proof of tampering. The gate guard reads `gate.json`, which the agent's
+  own logs feed; an agent that fabricated its way past the gates can also
+  unseal early.

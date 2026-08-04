@@ -42,6 +42,8 @@ The P4 recall check is the run's only unbiased measure of its own coverage, and 
 
 **Agent rule, absolute:** `SEALED_recall_check.md` may not be read, listed, searched, or inferred about before phase P4. Reading it early invalidates the entire run and must be reported as such. If your harness surfaces its contents unbidden, stop and tell the operator rather than continuing.
 
+**The check is computed, not self-graded.** At P4, run `scripts/recall_check.py` — it refuses while gates are failing, parses the sealed entries, and matches each against the corpus mechanically (URL, arXiv id, title tokens), writing found/missed to `state/recall_check.json`. Verify its `found` matches by eye (token matching can flatter), then investigate every miss: *why* did twelve rounds not surface something the operator knew from memory? The answer is a coverage finding for §8. Two enforcement hooks back this: `graph_metrics.py` records the sealed file's hash into the ledger every round without reading its text, so a mid-run edit to the sealed list is visible at P4 — and `validate_report.py` blocks delivery if a computed miss never made it into §8 and §0.
+
 If you would rather not trust the seal, hold the list yourself and paste it when the agent reaches P4 and asks.
 
 ### 0.2 Steering channel
@@ -352,7 +354,7 @@ P2  ROUND LOOP  ─────────────────────�
       g. REFRONTIER  gap analysis -> new frontier               │
       h. GATE        if gates fail -> loop  ─────────────────────┘
 P3  RED TEAM         adversarial prior-art assault (§11.1)
-P4  RECALL CHECK     unseal SEALED_recall_check.md — first read permitted here
+P4  RECALL CHECK     unseal via scripts/recall_check.py — first read here (§0.1)
 P5  ADJUDICATE       novelty verdict, triple-run (§13)
 P6  EVOLUTION +      trajectory analysis, then opportunity map
     PROSPECT         (§14) — the generative half, equal weight to P5
@@ -1276,6 +1278,10 @@ python3 scripts/validate_graph.py --run-root . --json         # machine-readable
 # Round loop, from round 8 — computes structural opportunity candidates and
 # clusters author-stated limitations. Feeds the prospector (§11.2).
 python3 scripts/find_opportunities.py --run-root .
+
+# P4 — the unsealing tool. Refuses while gates fail; matches every sealed
+# entry against the corpus mechanically; checks the ledger hash anchor.
+python3 scripts/recall_check.py --run-root .
 
 # P7 — builds the self-contained out/viz.html
 python3 scripts/render_viz.py --run-root .
