@@ -134,6 +134,29 @@ Then:
 3. Fill in `tool_mapping` in `state/capabilities.json` with your harness's tool
    names.
 
+### Run modes
+
+Three modes, declared at init time and read by every script (MANUAL §23).
+Modes change what is adjudicated, never how rigorously.
+
+```bash
+# fresh (default): an idea from nothing. Full floors: 12 rounds, 200 papers.
+python3 scripts/init_run.py --slug my-idea
+
+# incremental: you have a completed run and want to add a feature to the idea.
+# Imports the base corpus as evidence, adjudicates the delta and its
+# interaction with the base, and reports the feature's measured impact in
+# neighboring systems. Floors rescale to the delta (6 rounds, 75 delta-scoped
+# papers); a mandatory refresh sweep re-checks the base against the current
+# literature.
+python3 scripts/init_run.py --slug my-idea-delta --base-run runs/my-idea
+
+# anchored: a follow-up idea to a named paper/repo/report. Full fresh floors,
+# seeded from the anchor: its forward citations are the red team's primary
+# hunting ground, and the report assesses how solid the anchor itself is.
+python3 scripts/init_run.py --slug follow-up --anchor https://arxiv.org/abs/XXXX
+```
+
 ---
 
 ## Running it

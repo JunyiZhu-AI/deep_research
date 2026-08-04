@@ -23,3 +23,13 @@ steering it.
 Target venue or audience:
 
 Anything the agent should treat as a hard constraint (compute, data, licensing):
+
+## If this is not a fresh run (MANUAL §23)
+
+Incremental (`--base-run`): describe only the FEATURE being added and why you
+expect it to matter. Do not restate the base idea — it is in the imported
+decomposition — and do not name papers about the feature.
+
+Anchored (`--anchor`): describe the follow-up idea relative to the anchor. The
+anchor is the one artifact you may name; naming any other related work biases
+the search, same as above.

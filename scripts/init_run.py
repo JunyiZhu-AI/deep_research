@@ -18,6 +18,18 @@ Usage:
     python3 scripts/init_run.py --slug my-idea
     python3 scripts/init_run.py --slug my-idea --no-probe
     python3 scripts/init_run.py --slug my-idea --force
+
+Run modes (MANUAL §23) — the flags below write state/mode.json, which
+graph_metrics.py, round.py, and validate_report.py read:
+
+    # incremental: delta against a completed prior run (imports its corpus)
+    python3 scripts/init_run.py --slug my-idea-delta --base-run runs/my-idea
+
+    # fresh gates, but seed the corpus from a prior run
+    python3 scripts/init_run.py --slug my-idea-2 --base-run runs/my-idea --seed-only
+
+    # anchored: follow-up idea to a named artifact
+    python3 scripts/init_run.py --slug follow-up --anchor https://arxiv.org/abs/xxxx --anchor-kind paper
 """
 
 import argparse
@@ -52,6 +64,7 @@ BINARIES = [
 
 MODULES = [
     ("networkx", "graph metrics and community detection", True),
+    ("scipy", "pagerank backend for networkx>=3; degrades to degree centrality", False),
     ("pdfplumber", "table extraction from results sections", False),
     ("fitz", "PyMuPDF: image extraction with position data", False),
     ("pypdf", "fallback text extraction", False),
@@ -74,8 +87,142 @@ EMPTY_GRAPH = {
 }
 
 
+# MANUAL §23.1 — incremental floors. Written into mode.json so the agent can
+# read them but never silently recalibrate them (banned behavior 44).
+INCREMENTAL_FLOORS = {
+    "min_rounds": 6,
+    "min_delta_digested": 75,
+    "strategy_exhaustion_min": 8,
+    "prospector_start_round": 4,
+}
+
+ANCHOR_KINDS = ("paper", "repo", "techreport", "thesis", "blogpost")
+
+
 def have_binary(name):
     return shutil.which(name) is not None
+
+
+def link_or_copy(src, dst):
+    """Hardlink where possible (PDF corpora run to gigabytes), else copy."""
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+def import_base(run, base):
+    """Import a completed run's evidence per MANUAL §23.1.
+
+    Cards, text, PDFs, index, graph, threats, and the base decomposition come
+    over — all stamped inherited_from_base with round_added reset to 0.
+    seen_queries / card_audits / ledger stay behind on purpose: the gates are
+    proof-of-work meters for THIS run. Opportunities land in inherited.jsonl,
+    reopenable only after their falsifier is re-searched.
+    """
+    counts = {"cards": 0, "text": 0, "pdf": 0, "nodes": 0,
+              "threats": 0, "opportunities": 0}
+
+    src_cards = os.path.join(base, "corpus", "cards")
+    if os.path.isdir(src_cards):
+        for name in sorted(os.listdir(src_cards)):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(src_cards, name), encoding="utf-8") as fh:
+                try:
+                    card = json.load(fh)
+                except json.JSONDecodeError:
+                    continue
+            card["inherited_from_base"] = True
+            card["base_round_added"] = card.get("round_added")
+            card["round_added"] = 0
+            with open(os.path.join(run, "corpus", "cards", name), "w",
+                      encoding="utf-8") as fh:
+                json.dump(card, fh, indent=1, ensure_ascii=False)
+            counts["cards"] += 1
+
+    for sub, key in (("text", "text"), ("pdf", "pdf")):
+        src = os.path.join(base, "corpus", sub)
+        if os.path.isdir(src):
+            for name in sorted(os.listdir(src)):
+                dst = os.path.join(run, "corpus", sub, name)
+                if not os.path.exists(dst):
+                    link_or_copy(os.path.join(src, name), dst)
+                    counts[key] += 1
+
+    src_index = os.path.join(base, "corpus", "index.jsonl")
+    if os.path.exists(src_index):
+        shutil.copy2(src_index, os.path.join(run, "corpus", "index.jsonl"))
+
+    base_graph = None
+    for cand in (os.path.join(base, "out", "graph.json"),
+                 os.path.join(base, "graph", "graph.json")):
+        if os.path.exists(cand):
+            with open(cand, encoding="utf-8") as fh:
+                base_graph = json.load(fh)
+            break
+    base_report_date = None
+    if base_graph:
+        base_report_date = (base_graph.get("meta") or {}).get("generated")
+        for node in base_graph.get("nodes", []):
+            node["inherited_from_base"] = True
+            node["base_round_added"] = node.get("round_added")
+            node["round_added"] = 0
+        meta = base_graph.setdefault("meta", {})
+        meta["round"] = 0
+        meta["base_run"] = os.path.abspath(base)
+        counts["nodes"] = len(base_graph.get("nodes", []))
+        for dst in (os.path.join(run, "graph", "graph.json"),
+                    os.path.join(run, "graph", "snapshots", "round_00.json")):
+            with open(dst, "w", encoding="utf-8") as fh:
+                json.dump(base_graph, fh, indent=2, ensure_ascii=False)
+
+    src_threats = os.path.join(base, "redteam", "threats.jsonl")
+    if os.path.exists(src_threats):
+        with open(src_threats, encoding="utf-8") as fh, \
+             open(os.path.join(run, "redteam", "threats.jsonl"), "w",
+                  encoding="utf-8") as out:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t["inherited_from_base"] = True
+                t["base_round_added"] = t.get("round_added")
+                t["round_added"] = 0
+                out.write(json.dumps(t, ensure_ascii=False) + "\n")
+                counts["threats"] += 1
+
+    inherited_opps = os.path.join(run, "opportunities", "inherited.jsonl")
+    with open(inherited_opps, "w", encoding="utf-8") as out:
+        for name in ("opportunities.jsonl", "closed.jsonl"):
+            src = os.path.join(base, "opportunities", name)
+            if not os.path.exists(src):
+                continue
+            with open(src, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    o["inherited_from_base"] = True
+                    o["needs_falsifier_recheck"] = True
+                    o["was_in"] = name
+                    out.write(json.dumps(o, ensure_ascii=False) + "\n")
+                    counts["opportunities"] += 1
+
+    src_decomp = os.path.join(base, "state", "decomposition.json")
+    if os.path.exists(src_decomp):
+        shutil.copy2(src_decomp,
+                     os.path.join(run, "state", "base_decomposition.json"))
+
+    return counts, base_report_date
 
 
 def have_module(name):
@@ -136,7 +283,25 @@ def main():
                     help="skip network probes (offline setup)")
     ap.add_argument("--force", action="store_true",
                     help="scaffold into a directory that already exists")
+    ap.add_argument("--base-run", default=None,
+                    help="path to a completed run; imports its corpus and sets "
+                         "mode: incremental (MANUAL §23.1)")
+    ap.add_argument("--seed-only", action="store_true",
+                    help="with --base-run: import the corpus but keep mode: "
+                         "fresh with full floors (MANUAL §23.3)")
+    ap.add_argument("--anchor", default=None,
+                    help="URL of the anchor artifact; sets mode: anchored "
+                         "(MANUAL §23.2)")
+    ap.add_argument("--anchor-kind", default="paper", choices=ANCHOR_KINDS)
     args = ap.parse_args()
+
+    if args.base_run and args.anchor:
+        sys.exit("[init] --base-run and --anchor are mutually exclusive; "
+                 "pick one mode (MANUAL §23.3).")
+    if args.seed_only and not args.base_run:
+        sys.exit("[init] --seed-only requires --base-run.")
+    if args.base_run and not os.path.isdir(args.base_run):
+        sys.exit(f"[init] --base-run {args.base_run} is not a directory.")
 
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     run = os.path.join(args.root, args.slug)
@@ -147,6 +312,50 @@ def main():
 
     for d in DIRS:
         os.makedirs(os.path.join(run, d), exist_ok=True)
+
+    # ---- run mode (MANUAL §23)
+    now = datetime.now(timezone.utc).isoformat()
+    imported, base_report_date = None, None
+    if args.base_run:
+        print(f"importing base run from {args.base_run} (MANUAL §23.1)...")
+        imported, base_report_date = import_base(run, args.base_run)
+        print(f"  {imported['cards']} cards, {imported['nodes']} graph nodes, "
+              f"{imported['text']} text files, {imported['pdf']} PDFs, "
+              f"{imported['threats']} threats, "
+              f"{imported['opportunities']} opportunities -> inherited.jsonl")
+        print("  NOT imported (per §23.1): seen_queries, card_audits, ledger — "
+              "this run's gates measure this run's work.")
+
+    if args.base_run and not args.seed_only:
+        mode_doc = {
+            "mode": "incremental",
+            "declared": now,
+            "base_run": os.path.abspath(args.base_run),
+            "base_report_date": base_report_date,
+            "imported": imported,
+            "delta_components": [],
+            "floors": dict(INCREMENTAL_FLOORS),
+            "note": "Agent fills delta_components after P0. mode, base_run, "
+                    "and floors are operator-owned (MANUAL §23.0, banned 44).",
+        }
+    elif args.anchor:
+        mode_doc = {
+            "mode": "anchored",
+            "declared": now,
+            "anchor": {"ref": args.anchor, "kind": args.anchor_kind,
+                       "card_id": None},
+            "note": "Agent fills anchor.card_id after the anchor dossier "
+                    "(MANUAL §23.2). mode is operator-owned (§23.0).",
+        }
+    else:
+        mode_doc = {"mode": "fresh", "declared": now}
+        if args.seed_only:
+            mode_doc["seeded_from"] = os.path.abspath(args.base_run)
+            mode_doc["note"] = ("Corpus seeded from a prior run; gates run at "
+                                "full fresh floors (MANUAL §23.3).")
+    with open(os.path.join(run, "state", "mode.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(mode_doc, fh, indent=2)
 
     # copy the scripts in so the run is self-contained and reproducible
     src = os.path.join(here, "scripts")
@@ -260,15 +469,41 @@ def main():
               "parsed reference sections; forward citations use MANUAL §2.3. "
               "Record this limitation in report §8.")
 
+    mode = mode_doc["mode"]
+    brief_what = {
+        "incremental": "the FEATURE being added (not the base idea)",
+        "anchored": f"the follow-up idea to the anchor ({args.anchor})",
+    }.get(mode, "the idea")
+    sealed_what = {
+        "incremental": "prior art you know about the FEATURE",
+        "anchored": "prior art you know about the FOLLOW-UP",
+    }.get(mode, "prior art you already know")
     print(f"""
+Mode: {mode}  (state/mode.json — MANUAL §23)
+
 Next:
-  1. Write the idea into {run}/00_brief.md
-  2. Put prior art you already know into {run}/SEALED_recall_check.md
+  1. Write {brief_what} into {run}/00_brief.md
+  2. Put {sealed_what} into {run}/SEALED_recall_check.md
      -- then do not mention it. It is the only unbiased coverage check you get.
   3. Fill in tool_mapping in {run}/state/capabilities.json
      — and confirm worker_config: 1M context, maximum thinking effort
-  4. Give the agent README.md and the idea. Nothing else.
-""")
+  4. Give the agent README.md and the idea. Nothing else.""")
+    if mode == "incremental":
+        print("""
+Incremental specifics (MANUAL §23.1):
+  - P0 must produce delta + interaction components; list their IDs in
+    state/mode.json delta_components.
+  - Round 1 re-adjudicates inherited cards against the delta components.
+  - The refresh_sweep gate fails until forward citations of base core nodes
+    are swept (role: "refresh") and state/refresh_sweep.json is written.""")
+    elif mode == "anchored":
+        print("""
+Anchored specifics (MANUAL §23.2):
+  - Digest the anchor FIRST, full depth; record its card id in
+    state/mode.json anchor.card_id.
+  - The anchor_coverage gate fails until its forward citations are swept
+    (role: "anchor_forward").""")
+    print()
     return 1 if missing_crit else 0
 
 

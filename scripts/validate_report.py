@@ -182,6 +182,21 @@ def check_readability(md, sections, d):
                   "reading path must not nest past '###'")
 
 
+def _require_subsection(md, heading_re, where, kind, why, d):
+    """A §23 mode subsection must exist and hold real content -- a bare
+    heading is the checkbox version of the requirement."""
+    m = re.search(heading_re, md, re.M | re.I)
+    if not m:
+        d.add(kind, where, why)
+        return
+    tail = md[m.end():]
+    nxt = re.search(r"^#{1,3}\s", tail, re.M)
+    body = tail[:nxt.start()] if nxt else tail
+    if len(prose_only(body).split()) < 30:
+        d.add(kind, where,
+              f"subsection present but under 30 words -- {why}")
+
+
 def check_completeness(md, sections, root, d):
     graph = None
     for cand in (os.path.join(root, "out", "graph.json"),
@@ -248,6 +263,28 @@ def check_completeness(md, sections, root, d):
     # the anti-report (§15.3)
     if 10 not in sections and "would make this report wrong" not in md.lower():
         d.add("no_anti_report", "§10", "'What would make this report wrong' missing")
+
+    # §23 mode-conditional subsections
+    mode = "fresh"
+    mode_path = os.path.join(root, "state", "mode.json")
+    if os.path.exists(mode_path):
+        try:
+            with open(mode_path, encoding="utf-8") as fh:
+                mode = json.load(fh).get("mode", "fresh")
+        except (json.JSONDecodeError, OSError):
+            pass
+    if mode == "incremental":
+        _require_subsection(md, r"^###\s+Impact evidence\b", "§2",
+                            "impact_evidence_missing",
+                            "incremental runs must report the feature's measured "
+                            "effect in neighboring systems, or state that no "
+                            "comparable evidence exists (§23.1)", d)
+    elif mode == "anchored":
+        _require_subsection(md, r"^###\s+Anchor solidity\b", "§1",
+                            "anchor_solidity_missing",
+                            "anchored runs must assess which anchor claims the "
+                            "follow-up load-bears on and how strong each is "
+                            "(§23.2)", d)
 
 
 def main():

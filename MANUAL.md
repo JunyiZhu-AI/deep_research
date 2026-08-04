@@ -13,6 +13,7 @@ Fill in the capability map in §2, then issue:
 Execute DEEP RESEARCH OPERATING MANUAL v1.2.
 
 RUN_ROOT: ./runs/<slug>
+MODE: fresh                        # or incremental / anchored — §23; must match state/mode.json
 MAX_CONCURRENCY: 10
 MIN_ROUNDS: 12
 MIN_DIGESTED: 200
@@ -370,6 +371,8 @@ Slots buy less raw throughput than they used to and more depth per slot: a diges
 
 Everything downstream is bounded by the quality of this phase. Do not single-shot it.
 
+In incremental and anchored runs P0 changes shape — delta decomposition with mandatory interaction components, or an anchor dossier before decomposition. §23 specifies both; the ensemble discipline below applies unchanged.
+
 **Dispatch 10 workers in parallel**, each given the raw brief and *no* other worker's output, each producing an independent decomposition. Then merge by union, not by vote — a component proposed by one worker out of ten is kept, because recall is what matters here.
 
 Each worker produces:
@@ -631,6 +634,7 @@ Red team tactics beyond the standard portfolio:
 - Hunt for the idea as an *unremarked implementation detail* inside a larger system paper, an appendix, or a footnote. This is where anticipations most often hide.
 - Search rejected OpenReview submissions and their reviews; reviewers frequently name the exact prior art.
 - Search for the idea as a *negative result* — someone may have tried it and reported it failing.
+- In anchored runs (§23.2): the anchor's forward citations are the primary hunting ground, swept under `role: "anchor_forward"`; then the follow-up against the anchor's sibling artifacts; then the anchor's own stated future work.
 
 P3 runs a full dedicated red-team phase after the main loop, using the completed graph to target gaps. **The novelty gate cannot pass until the red team has produced two consecutive rounds with no new `medium`-or-above threat.**
 
@@ -790,6 +794,8 @@ Three of these gates were, in v1.1, satisfiable by doing *less* work. They are n
 
 **Fail-closed:** a metric that cannot be computed counts as failed. **All twelve must pass.** If any fails, the loop continues — and the failing metric determines the next round's assignment mix.
 
+**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added. The rescaled values are in §23.1, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
+
 ---
 
 ## 13. NOVELTY ADJUDICATION (P5)
@@ -911,10 +917,12 @@ Aim for legibility over density. If the core graph exceeds ~150 nodes, default t
     - The one recommendation: proceed / proceed-with-reframing / pivot to
       OPP-nn / abandon — stated plainly, with the reason
 
-## 1. The idea as decomposed     (§5, load-bearing components marked)
+## 1. The idea as decomposed     (§5, load-bearing components marked;
+                                  anchored runs add "### Anchor solidity" — §23.2)
 
 ## 2. Novelty adjudication       (§13 — table, then per-component prose with
-                                  evidence anchors and dates)
+                                  evidence anchors and dates; incremental runs
+                                  add "### Impact evidence" — §23.1)
 
 ## 3. The strongest objection    (the hostile-reviewer argument, its citations,
                                   and the best rebuttal — or an honest
@@ -1086,6 +1094,10 @@ Violating any of these invalidates the run:
 38. Batching papers by convenience rather than relatedness.
 39. Reading `graph/graph.json` in full into the orchestrator's context.
 40. Dropping context without appending to `state/JUDGMENT.md` first.
+41. In an incremental run, declining a search because "the base run covered that" while the `refresh_sweep` gate is failing (§23.1).
+42. Importing base-run query logs, card audits, or opportunity records to satisfy this run's gates, or reopening an inherited opportunity without re-searching its falsifier (§23.1).
+43. In an anchored run, treating the anchor's claims as ground truth instead of scoring them like any other card (§23.2).
+44. Editing `mode`, `base_run`, or the floors in `state/mode.json` (§23.0).
 
 ---
 
@@ -1315,3 +1327,77 @@ Two failures deserve naming because they look like opposites and are the same mi
 - [ ] The anti-report (§10) is written
 - [ ] No claim anywhere traces to memory rather than a retrieved artifact
 - [ ] `state/anomalies.jsonl` reviewed; recurring steering attempts noted in §8
+- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present
+
+---
+
+## 23. RUN MODES — FRESH, INCREMENTAL, ANCHORED
+
+Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Two other modes exist. Both are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. The machinery is shared because the shape is shared.
+
+**Modes change scope, never rigor.** The fabrication firewall, the sealed recall check, the two teams, the banned behaviors, §16 readability, and fail-closed gate computation apply identically in every mode. A mode is a scoping of *what* is adjudicated, never a discount on *how*.
+
+### 23.0 Mode declaration — `state/mode.json`
+
+`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
+
+### 23.1 Incremental mode — a delta against your own prior run
+
+The operator has a completed run and now wants to add a feature to the idea and learn two things: **is the idea-plus-feature still novel**, and **what does the literature say the feature's impact will be**.
+
+**The base corpus is evidence, not memory.** Every inherited card carries provenance and extracted text on disk, so reusing it does not touch §1.4. `init_run.py --base-run <path>` imports: cards (stamped `inherited_from_base: true`, original round preserved as `base_round_added`, `round_added` reset to 0), extracted text, PDFs (hardlinked), the graph (nodes stamped the same way, cluster labels and narratives carried forward), the corpus index, red-team threats (at round 0), and the base decomposition as `state/base_decomposition.json`.
+
+**What is deliberately NOT imported: `seen_queries.jsonl`, `card_audits.jsonl`, `ledger.jsonl`, and `opportunities.jsonl`.** The gates are proof-of-work meters for *this* run; importing the base run's logs would satisfy them with work this run never did. Base opportunities land in `opportunities/inherited.jsonl` and may be reopened **only** after their falsifier is searched again — an opportunity validated a month ago may have been taken.
+
+**P0 becomes delta decomposition.** Run the §5 ensemble on the *feature*, producing delta components `D1..Dk` — and, mandatorily, **interaction components**: precise statements of what the feature does *to* the base idea (`kind: "combination"`). The feature alone is almost always known; the novelty verdict lives in the interaction, and a decomposition that omits interaction components hunts the wrong thing. Write the union (base components + delta components) into `graph.meta.components`, and list the delta component IDs in `mode.json` `delta_components`. The P0 checkpoint applies.
+
+**Round 1 is a re-adjudication pass.** Dispatch workers over the inherited corpus in related batches to add `per_component` entries for every delta component to every inherited card — `anticipated | partial | distinct`, or an explicit `unrelated`. An inherited card without delta entries is invisible to the delta gates on purpose: it has not yet been read against the new question. Budget honestly: re-adjudicating a 300-card corpus is a few hours of worker time, not free.
+
+**The refresh sweep is mandatory and gate-backed.** The base corpus is frozen at the base run's delivery date; the field is not. Sweep forward citations of every `status: core` base node since `base_report_date`, log each query to `seen_queries.jsonl` with `role: "refresh"`, and write `state/refresh_sweep.json`:
+
+```json
+{"completed": true, "base_core_nodes_total": 84, "base_core_nodes_checked": 84,
+ "window_start": "2026-03-01", "new_threats_found": 2, "new_nodes_added": 11}
+```
+
+The `refresh_sweep` gate fails until `completed` is true, checked equals total, and ≥10 distinct `role: "refresh"` queries are logged. Anything the sweep surfaces that threatens a *base* component reopens that component's adjudication — the base verdict is inherited, not immortal.
+
+**Delta scope and rescaled gates.** A card is *delta-scoped* if it is newly digested this run, or inherited with a `per_component` entry for any delta component. In incremental mode four thresholds rescale and one gate is added; everything else — `new_node_rate` proof-of-work, `redteam_null` verification, `card_fidelity`, `citation_closure`, both validators — applies at full strength:
+
+| Gate | Fresh | Incremental |
+|---|---|---|
+| `min_rounds` | ≥ 12 | ≥ 6 |
+| `min_digested` | ≥ 200 full-text | ≥ 75 **delta-scoped** full-text |
+| `strategy_exhaustion` | ≥ 12 of 15 | ≥ 8 of 15 |
+| prospector start | round 8 | round 4 |
+| `refresh_sweep` | — | required (fail-closed) |
+
+**"The base run covered that" is a named rationalization** (§1.3). The base run adjudicated a different idea against a corpus that is now months stale. If you catch yourself declining a search because the base corpus feels sufficient, that is the frugality symptom, not information — the refresh sweep and the delta floors exist because of it.
+
+**The impact question gets its own evidence.** The report's §2 gains a subsection `### Impact evidence`: every card where this feature (or its nearest analogue) was added to a neighboring system, with the measured effect from card `results` fields — effect sizes, benchmarks, dates, keyed per §14's comparability rules. If the corpus contains no comparable evidence, the subsection says exactly that; an empty impact section is a finding, an extrapolated one is a fabrication. `validate_report.py` checks for the subsection.
+
+**Adjudication and the sealed file.** P5 adjudicates delta and interaction components with the full §13 machinery, triple-run included. Base components keep their base scores unless the refresh sweep or the re-adjudication pass surfaced a new threat, in which case they are re-adjudicated and the change is reported. The operator writes a **new** `SEALED_recall_check.md` for the delta — work they already know is related to the *feature* — under the same seal rules.
+
+### 23.2 Anchored mode — a follow-up to a named artifact
+
+The operator supplies an anchor — a paper, repository, tech report, or thesis — and a follow-up idea defined relative to it. The run's question: **has anyone already done this follow-up to this anchor (or to an equivalent of it), and how does the follow-up combine with what the anchor actually established?** This is a full run under full fresh-mode gates, seeded differently.
+
+**P0 gains a step: the anchor dossier, before decomposition.** Digest the anchor first, at full depth, to a normal §7.2 card plus a complete parse of its reference list, its stated assumptions, its stated future work, and its `blocked_by` obstacles. Record the card's ID in `mode.json` under `anchor.card_id`. The anchor is the one artifact the brief may name; the operator still must not name other related work (§0.1).
+
+**The anchor is scored, never trusted.** Its claims get the same `strength × evidence_type` scoring as every other card, and the report's §1 gains a subsection `### Anchor solidity`: which of the anchor's claims the follow-up actually load-bears on, how strong the evidence for each is, and what the follow-up inherits if one is wrong. A follow-up to a weak anchor is a follow-up to a risk, and the tired human reading §0 must be told. `validate_report.py` checks for the subsection.
+
+**Decomposition is three-way.** Anchor-inherited components (the anchor mechanisms the follow-up relies on), follow-up components (what the follow-up adds), and interaction components (what the combination claims). Novelty is adjudicated on the follow-up and interaction components; anchor-inherited components are adjudicated only for *solidity*, since the anchor itself is known prior art by construction.
+
+**The red team's primary hunting ground is the anchor's forward citations.** Anyone who already did this follow-up almost certainly cites the anchor. Sweep them, logging queries with `role: "anchor_forward"`. For heavily-cited anchors, enumerate stratified, not exhaustively: filter citing works by the follow-up's §5 vocabulary (canonical + author variants), then by the anchor's method name plus later years. Two further mandatory tactics: hunt the follow-up against the anchor's **siblings** (same-family artifacts — a follow-up anticipated against a sibling anchor translates trivially, threat `high` per §7.3), and mine the anchor's own stated future work — if the anchor's authors named your follow-up, find whether they or anyone else then did it.
+
+**The `anchor_coverage` gate** (fail-closed, anchored mode only): `anchor.card_id` set in `mode.json`, that card present at `full_text` depth, and ≥10 distinct `role: "anchor_forward"` queries logged. The run cannot pass gates while the anchor itself is undigested or its citation neighborhood unswept.
+
+### 23.3 Choosing a mode
+
+| You have | Mode | Invocation |
+|---|---|---|
+| An idea and nothing else | fresh | `init_run.py --slug x` |
+| A completed run + a new feature on the same idea | incremental | `init_run.py --slug x-delta --base-run runs/x` |
+| A specific paper/repo + a follow-up idea to it | anchored | `init_run.py --slug x --anchor <url> [--anchor-kind repo]` |
+
+A feature large enough to change the idea's load-bearing components is not an increment — it is a new idea that happens to share a corpus. If more than half the base's load-bearing components would need re-adjudication, run fresh: `init_run.py --slug x2 --base-run runs/x --seed-only` imports the corpus as ordinary seed material but keeps `mode: fresh` and the full floors. Say so in the brief.

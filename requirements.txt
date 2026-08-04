@@ -1,5 +1,7 @@
 # Required
 networkx>=3.0          # graph metrics, Louvain community detection
+scipy>=1.10            # networkx>=3 delegates pagerank to scipy; without it
+                       # centrality falls back to a degree approximation
 
 # Strongly recommended — the run degrades without these
 pdfplumber>=0.10       # table extraction from results sections

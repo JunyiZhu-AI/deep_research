@@ -338,7 +338,7 @@ in it is load-bearing in a way an ordinary README's is not.
 ## Verified clean
 
 - Every `§n` reference resolves to a real section after the v1.2 renumbering
-  (23 sections, no dangling refs).
+  (24 sections after §23 run modes was added, re-checked, no dangling refs).
 - Every script named in the README exists and runs.
 - The full chain runs end to end from a fresh copy: `init_run` → `round` →
   `validate_graph` → `find_opportunities` → `render_viz` → `validate_report`.
@@ -357,3 +357,17 @@ in it is load-bearing in a way an ordinary README's is not.
   measured whether rounds 12–20 contribute anything over rounds 1–11, and
   whether ~13,000 words of instruction is still followed at hour eleven remains
   the load-bearing untested assumption.
+- **The §23 mode gates repeat the A1–A3 pattern at smaller scale.** The
+  `refresh_sweep` totals are self-reported; the cross-check only requires ≥10
+  distinct `role: "refresh"` queries, which an agent could satisfy with token
+  searches while fabricating `base_core_nodes_checked`. `anchor_coverage` has
+  the same shape. Proof-of-work narrows the lazy path; it does not close it.
+- **Delta scoping trusts agent-written `per_component` entries.** An inherited
+  card counts toward the incremental floors the moment a delta entry appears
+  on it; only the §12.2 fidelity audit checks that the entry reflects the
+  paper. Fidelity sampling should over-weight re-adjudicated inherited cards
+  in incremental runs, and currently nothing enforces that.
+- **The incremental floors (6 rounds, 75 delta-scoped cards) are judgment, not
+  measurement.** No incremental run has been executed. Calibrate the same way
+  §0.3 calibrates a fresh run: add a feature whose prior art you already know
+  to a completed calibration run, and check the delta red team finds it.

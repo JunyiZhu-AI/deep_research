@@ -155,7 +155,22 @@ def main():
     args = ap.parse_args()
     root, rnd = args.run_root, args.round
 
-    print(f"\n=== round {rnd:02d} ===\n")
+    mode_path = os.path.join(root, "state", "mode.json")
+    mode, floors = "fresh", {}
+    if os.path.exists(mode_path):
+        try:
+            with open(mode_path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            if doc.get("mode") in ("fresh", "incremental", "anchored"):
+                mode = doc["mode"]
+                floors = doc.get("floors") or {}
+        except json.JSONDecodeError:
+            pass
+    prospector_start = (floors.get("prospector_start_round", 4)
+                        if mode == "incremental" else 8)
+
+    print(f"\n=== round {rnd:02d}"
+          + (f"  [{mode} — MANUAL §23]" if mode != "fresh" else "") + " ===\n")
 
     print("[1/3] metrics + gates")
     rc, out = run("graph_metrics.py", ["--run-root", root, "--round", str(rnd)],
@@ -185,7 +200,7 @@ def main():
             print("  " + line.strip())
 
     opp = ""
-    if rnd >= 8:
+    if rnd >= prospector_start:
         print("\n[3/3] opportunity candidates")
         orc, oout = run("find_opportunities.py", ["--run-root", root], "opps")
         try:
@@ -198,7 +213,8 @@ def main():
         except (json.JSONDecodeError, KeyError):
             print(oout[-400:])
     else:
-        print("\n[3/3] opportunity candidates — skipped (prospector starts round 8)")
+        print(f"\n[3/3] opportunity candidates — skipped (prospector starts "
+              f"round {prospector_start})")
 
     # ---- consolidated verdict
     gate_path = os.path.join(root, "state", f"round_{rnd:02d}", "gate.json")

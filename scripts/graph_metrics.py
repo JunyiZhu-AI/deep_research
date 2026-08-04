@@ -55,6 +55,10 @@ OPP_MIN_TYPES = 4
 OPP_MIN_EXTENDS = 2
 PROSPECTOR_START_ROUND = 8
 
+# §23 mode gates: proof-of-work minima for the sweeps each mode requires.
+REFRESH_QUERIES_MIN = 10      # distinct role:"refresh" queries (incremental)
+ANCHOR_QUERIES_MIN = 10       # distinct role:"anchor_forward" queries (anchored)
+
 HIGH_CONSEQUENCE_EDGES = {
     "subsumes", "equivalent", "special_case_of", "reinvents", "contradicts",
 }
@@ -116,7 +120,17 @@ def build_nx(graph):
 def centrality(g):
     if g.number_of_nodes() == 0:
         return {}
-    pr = nx.pagerank(g, alpha=0.85) if g.number_of_edges() else {n: 0.0 for n in g}
+    if g.number_of_edges():
+        try:
+            pr = nx.pagerank(g, alpha=0.85)
+        except (ImportError, ModuleNotFoundError):
+            # networkx >=3 delegates pagerank to scipy. Degree centrality is a
+            # coarse stand-in; the run survives, the ranking gets noisier.
+            print("[graph_metrics] warn: scipy missing, pagerank approximated "
+                  "by degree centrality -- pip install scipy", file=sys.stderr)
+            pr = nx.degree_centrality(g)
+    else:
+        pr = {n: 0.0 for n in g}
     try:
         k = min(g.number_of_nodes(), 200)               # sampled for large graphs
         bt = nx.betweenness_centrality(g, k=k, seed=17)
@@ -466,12 +480,13 @@ def card_fidelity(root, current_round, window=CARD_FIDELITY_ROUNDS):
     return rate, len(scored), problems
 
 
-def opportunity_coverage(root, graph, current_round):
+def opportunity_coverage(root, graph, current_round,
+                         start_round=PROSPECTOR_START_ROUND):
     """§11.5 -- the generative half cannot stop on a null result.
 
-    Before the prospector starts (round 8) this gate is simply not yet
-    satisfiable, which is correct: it should hold the run open, not wave it
-    through.
+    Before the prospector starts (round 8 fresh, round 4 incremental — §23.1)
+    this gate is simply not yet satisfiable, which is correct: it should hold
+    the run open, not wave it through.
     """
     recs = read_jsonl(os.path.join(root, "opportunities", "opportunities.jsonl"))
     complete = [o for o in recs
@@ -495,12 +510,92 @@ def opportunity_coverage(root, graph, current_round):
         "clusters_unevaluated": len(unevaluated),
         "incomplete_records": [o.get("id") for o in recs if o not in complete][:10],
     }
-    ok = (current_round >= PROSPECTOR_START_ROUND
+    ok = (current_round >= start_round
           and len(complete) >= OPP_MIN_RECORDS
           and len(types) >= OPP_MIN_TYPES
           and len(extends) >= OPP_MIN_EXTENDS
           and not unevaluated)
     return ok, detail
+
+
+def load_mode(root):
+    """§23.0 — state/mode.json is the single source of truth; absent = fresh."""
+    doc = read_json(os.path.join(root, "state", "mode.json"), {})
+    if doc.get("mode") not in ("fresh", "incremental", "anchored"):
+        return {"mode": "fresh"}
+    return doc
+
+
+def is_delta_card(card, delta_components):
+    """§23.1 — a card is delta-scoped if newly digested this run, or inherited
+    but re-adjudicated against at least one delta component. An inherited card
+    without delta per_component entries has not been read against the new
+    question and is invisible to the delta floors on purpose."""
+    if not card.get("inherited_from_base"):
+        return True
+    pc = (card.get("relation_to_idea") or {}).get("per_component") or {}
+    return any(c in pc for c in delta_components)
+
+
+def distinct_role_queries(root, role):
+    queries = read_jsonl(os.path.join(root, "state", "seen_queries.jsonl"))
+    distinct = {(q.get("query") or "").strip().lower()
+                for q in queries if q.get("role") == role}
+    distinct.discard("")
+    return len(distinct)
+
+
+def refresh_sweep(root):
+    """§23.1 — the base corpus is frozen at delivery; the field is not.
+
+    Fail-closed: no refresh_sweep.json, or an incomplete one, or too few
+    logged refresh queries, and the gate fails. The self-reported totals are
+    cross-checked against the query log so a bare 'completed: true' does not
+    pass on its own."""
+    doc = read_json(os.path.join(root, "state", "refresh_sweep.json"), {})
+    n_queries = distinct_role_queries(root, "refresh")
+    total = doc.get("base_core_nodes_total", 0) or 0
+    checked = doc.get("base_core_nodes_checked", 0) or 0
+    problems = []
+    if not doc:
+        problems.append("state/refresh_sweep.json not written")
+    if not doc.get("completed"):
+        problems.append("completed is not true")
+    if total <= 0:
+        problems.append("base_core_nodes_total missing or 0")
+    if checked < total:
+        problems.append(f"checked {checked} of {total} base core nodes")
+    if n_queries < REFRESH_QUERIES_MIN:
+        problems.append(f"{n_queries} distinct role:\"refresh\" queries "
+                        f"logged (need {REFRESH_QUERIES_MIN})")
+    detail = {"checked": checked, "total": total,
+              "refresh_queries": n_queries,
+              "new_threats_found": doc.get("new_threats_found"),
+              "problems": problems}
+    return not problems, detail
+
+
+def anchor_coverage(root, cards_by_id, mode_doc):
+    """§23.2 — the run cannot pass gates while the anchor is undigested or
+    its citation neighborhood unswept."""
+    anchor = mode_doc.get("anchor") or {}
+    card_id = anchor.get("card_id")
+    n_queries = distinct_role_queries(root, "anchor_forward")
+    problems = []
+    if not card_id:
+        problems.append("anchor.card_id not set in state/mode.json")
+    else:
+        card = cards_by_id.get(card_id)
+        if card is None:
+            problems.append(f"no card on disk for anchor {card_id!r}")
+        elif (card.get("provenance") or {}).get("depth") != "full_text":
+            problems.append(f"anchor card {card_id!r} is not full_text depth")
+    if n_queries < ANCHOR_QUERIES_MIN:
+        problems.append(f"{n_queries} distinct role:\"anchor_forward\" queries "
+                        f"logged (need {ANCHOR_QUERIES_MIN})")
+    detail = {"card_id": card_id, "anchor_forward_queries": n_queries,
+              "problems": problems}
+    return not problems, detail
 
 
 def ledger_streaks(ledger, key, predicate):
@@ -563,10 +658,30 @@ def main():
     else:
         graph["clusters"] = cluster_records
 
-    # --- §12 gates
+    # --- §12 gates, thresholds scaled by run mode (§23)
+    mode_doc = load_mode(root)
+    mode = mode_doc["mode"]
+    floors = mode_doc.get("floors") or {}
+    delta_components = mode_doc.get("delta_components") or []
+    if mode == "incremental":
+        min_rounds_thr = floors.get("min_rounds", 6)
+        min_digested_thr = floors.get("min_delta_digested", 75)
+        strategy_min = floors.get("strategy_exhaustion_min", 8)
+        prospector_start = floors.get("prospector_start_round", 4)
+    else:
+        min_rounds_thr = MIN_ROUNDS
+        min_digested_thr = MIN_DIGESTED
+        strategy_min = STRATEGY_EXHAUSTION_MIN
+        prospector_start = PROSPECTOR_START_ROUND
+
     components = graph.get("meta", {}).get("components", [])
     full_text = [c for c in cards
                  if c.get("provenance", {}).get("depth") == "full_text"]
+    if mode == "incremental":
+        digest_pool = [c for c in full_text
+                       if is_delta_card(c, delta_components)]
+    else:
+        digest_pool = full_text
     core_nodes = [n for n in graph.get("nodes", []) if n.get("status") == "core"]
     new_core = [n for n in core_nodes if n.get("round_added") == rnd]
     digested_this_round = [c for c in full_text if c.get("round_added") == rnd]
@@ -579,7 +694,8 @@ def main():
     explored, explore_why = round_was_exploratory(root, rnd, strategy_use)
     rt_streak, rt_notes = redteam_null_streak_verified(root, rnd)
     fidelity, n_audited, fidelity_problems = card_fidelity(root, rnd)
-    opp_ok, opp_detail = opportunity_coverage(root, graph, rnd)
+    opp_ok, opp_detail = opportunity_coverage(root, graph, rnd,
+                                              start_round=prospector_start)
     unexplored = [c["id"] for c in graph.get("clusters", [])
                   if c.get("expansion_state") == "unexplored"]
 
@@ -599,10 +715,14 @@ def main():
 
     # Fail-closed: anything not computed is failed (§12).
     gates = {
-        "min_rounds":         {"value": rnd, "threshold": MIN_ROUNDS,
-                               "pass": rnd >= MIN_ROUNDS},
-        "min_digested":       {"value": len(full_text), "threshold": MIN_DIGESTED,
-                               "pass": len(full_text) >= MIN_DIGESTED},
+        "min_rounds":         {"value": rnd, "threshold": min_rounds_thr,
+                               "pass": rnd >= min_rounds_thr},
+        "min_digested":       {"value": len(digest_pool),
+                               "scope": ("delta (§23.1)" if mode == "incremental"
+                                         else "all full_text"),
+                               "full_text_total": len(full_text),
+                               "threshold": min_digested_thr,
+                               "pass": len(digest_pool) >= min_digested_thr},
         "new_node_rate":      {"value": round(new_node_rate, 4),
                                "consecutive": rate_streak,
                                "round_exploratory": explored,
@@ -618,8 +738,8 @@ def main():
                                "pass": ari_streak >= CLUSTER_STABILITY_CONSEC},
         "strategy_exhaustion": {"value": n_exhausted, "of": STRATEGY_COUNT,
                                 "rejected": strat_rejected,
-                                "threshold": STRATEGY_EXHAUSTION_MIN,
-                                "pass": n_exhausted >= STRATEGY_EXHAUSTION_MIN},
+                                "threshold": strategy_min,
+                                "pass": n_exhausted >= strategy_min},
         "component_coverage": {"value": comp_counts, "threshold": COMPONENT_CARDS_MIN,
                                "pass": bool(components) and
                                        all(v >= COMPONENT_CARDS_MIN
@@ -640,6 +760,27 @@ def main():
         "validator":          {"value": "run validate_graph.py separately",
                                "threshold": 0, "pass": False},
     }
+    # §23 mode gates — present only in their mode, fail-closed like the rest.
+    if mode == "incremental":
+        rs_ok, rs_detail = refresh_sweep(root)
+        gates["refresh_sweep"] = {"value": rs_detail,
+                                  "threshold": "completed sweep + "
+                                               f">={REFRESH_QUERIES_MIN} refresh queries",
+                                  "pass": rs_ok}
+        if not delta_components:
+            # No declared delta components means the delta floors measure
+            # nothing. Fail min_digested explicitly rather than silently.
+            gates["min_digested"]["pass"] = False
+            gates["min_digested"]["scope"] = ("delta (§23.1) -- FAILING: "
+                                              "mode.json delta_components is "
+                                              "empty; fill it after P0")
+    elif mode == "anchored":
+        cards_by_id = {c.get("id"): c for c in cards if c.get("id")}
+        ac_ok, ac_detail = anchor_coverage(root, cards_by_id, mode_doc)
+        gates["anchor_coverage"] = {"value": ac_detail,
+                                    "threshold": "anchor digested full_text + "
+                                                 f">={ANCHOR_QUERIES_MIN} forward queries",
+                                    "pass": ac_ok}
     all_pass = all(gate["pass"] for gate in gates.values())
 
     # --- guidance: the failing gate drives next round's assignment mix (§12)
@@ -668,11 +809,18 @@ def main():
         guidance.append({"gate": "card_fidelity", "action": "spot_audit_cards",
                          "targets": fidelity_problems[:5] or
                                     ["log 3 audits to state/card_audits.jsonl"]})
-    if not gates["opportunity_coverage"]["pass"] and rnd >= PROSPECTOR_START_ROUND:
+    if not gates["opportunity_coverage"]["pass"] and rnd >= prospector_start:
         guidance.append({"gate": "opportunity_coverage", "action": "run_prospector",
                          "targets": (opp_detail["incomplete_records"] or
                                      [f"{opp_detail['clusters_unevaluated']} clusters "
                                       "not yet evaluated for opportunity"])})
+    if "refresh_sweep" in gates and not gates["refresh_sweep"]["pass"]:
+        guidance.append({"gate": "refresh_sweep", "action": "run_refresh_sweep",
+                         "targets": gates["refresh_sweep"]["value"]["problems"][:4]})
+    if "anchor_coverage" in gates and not gates["anchor_coverage"]["pass"]:
+        guidance.append({"gate": "anchor_coverage",
+                         "action": "sweep_anchor_forward_citations",
+                         "targets": gates["anchor_coverage"]["value"]["problems"][:4]})
 
     undigested_central = sorted(
         ({"id": n["id"], "pagerank": cent.get(n["id"], {}).get("pagerank", 0)}
@@ -682,6 +830,7 @@ def main():
 
     gate_doc = {
         "round": rnd,
+        "mode": mode,
         "computed": datetime.now(timezone.utc).isoformat(),
         "gates": gates,
         "all_pass": all_pass,
@@ -732,6 +881,7 @@ def main():
 
     ledger_line = {
         "round": rnd,
+        "mode": mode,
         "ts": datetime.now(timezone.utc).isoformat(),
         "nodes_total": len(graph.get("nodes", [])),
         "nodes_core": len(core_nodes),
@@ -739,6 +889,8 @@ def main():
         "edges_hypothesis": sum(1 for e in graph.get("edges", [])
                                 if e.get("status") == "hypothesis"),
         "cards_full_text": len(full_text),
+        "cards_delta_full_text": (len(digest_pool) if mode == "incremental"
+                                  else None),
         "cards_total": len(cards),
         "new_node_rate": round(new_node_rate, 4),
         "citation_closure": round(closure, 4),
