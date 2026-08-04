@@ -264,36 +264,43 @@ def check_completeness(md, sections, root, d):
     if 10 not in sections and "would make this report wrong" not in md.lower():
         d.add("no_anti_report", "§10", "'What would make this report wrong' missing")
 
-    # the recall check made it into the report (§0.1, §13.2)
-    sealed = os.path.join(root, "SEALED_recall_check.md")
+    # the recall check made it into the report (§0.1, §13.2). The record is
+    # required in EVERY run: from the sealed file, from a pasted list
+    # (--paste), or an explicit none-provided record (--none). A run without
+    # the record is a run whose only external calibration is unaccounted for.
     rc_path = os.path.join(root, "state", "recall_check.json")
-    if os.path.exists(sealed):
-        if not os.path.exists(rc_path):
-            d.add("recall_never_computed", "P4",
-                  "SEALED_recall_check.md exists but state/recall_check.json "
-                  "does not -- run scripts/recall_check.py at P4 (§0.1)")
-        else:
-            try:
-                with open(rc_path, encoding="utf-8") as fh:
-                    rc = json.load(fh)
-            except (json.JSONDecodeError, OSError):
-                rc = {}
-            if rc.get("n_missed", 0) > 0:
-                coverage = sections.get(8, ("", ""))[1]
-                verdict = sections.get(0, ("", ""))[1]
-                if "recall" not in coverage.lower():
-                    d.add("recall_miss_not_reported", "§8",
-                          f"{rc['n_missed']} sealed item(s) missed but §8 "
-                          "never mentions the recall check (§22)")
-                if "recall" not in verdict.lower():
-                    d.add("recall_miss_not_in_verdict", "§0",
-                          "a recall miss lowers every confidence and §0 must "
-                          "say so explicitly (§13.2)")
-            if rc.get("hash_consistent") is False and \
-                    "sealed" not in sections.get(8, ("", ""))[1].lower():
-                d.add("seal_tamper_not_reported", "§8",
-                      "the sealed file changed mid-run (hash mismatch) and §8 "
-                      "does not surface it (§0.1)")
+    if not os.path.exists(rc_path):
+        d.add("recall_never_computed", "P4",
+              "state/recall_check.json missing -- at P4 run "
+              "scripts/recall_check.py (sealed file), --paste <file> "
+              "(operator-held list), or --none (no list exists) (§0.1)")
+    else:
+        try:
+            with open(rc_path, encoding="utf-8") as fh:
+                rc = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            rc = {}
+        coverage = sections.get(8, ("", ""))[1]
+        verdict = sections.get(0, ("", ""))[1]
+        if rc.get("n_missed", 0) > 0:
+            if "recall" not in coverage.lower():
+                d.add("recall_miss_not_reported", "§8",
+                      f"{rc['n_missed']} sealed item(s) missed but §8 "
+                      "never mentions the recall check (§22)")
+            if "recall" not in verdict.lower():
+                d.add("recall_miss_not_in_verdict", "§0",
+                      "a recall miss lowers every confidence and §0 must "
+                      "say so explicitly (§13.2)")
+        if not rc.get("total") and "calibration" not in coverage.lower():
+            d.add("recall_absence_not_disclosed", "§8",
+                  "no recall list existed (source: "
+                  f"{rc.get('source', 'unknown')!r}) -- §8 must state that "
+                  "the run had no external calibration (§13.2)")
+        if rc.get("hash_consistent") is False and \
+                "sealed" not in coverage.lower():
+            d.add("seal_tamper_not_reported", "§8",
+                  "the sealed file changed mid-run (hash mismatch) and §8 "
+                  "does not surface it (§0.1)")
 
     # §23 mode-conditional subsections
     mode, mode_doc = "fresh", {}

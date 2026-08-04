@@ -44,6 +44,12 @@ The P4 recall check is the run's only unbiased measure of its own coverage, and 
 
 **The check is computed, not self-graded.** At P4, run `scripts/recall_check.py` — it refuses while gates are failing, parses the sealed entries, and matches each against the corpus mechanically (URL, arXiv id, title tokens), writing found/missed to `state/recall_check.json`. Verify its `found` matches by eye (token matching can flatter), then investigate every miss: *why* did twelve rounds not surface something the operator knew from memory? The answer is a coverage finding for §8. Two enforcement hooks back this: `graph_metrics.py` records the sealed file's hash into the ledger every round without reading its text, so a mid-run edit to the sealed list is visible at P4 — and `validate_report.py` blocks delivery if a computed miss never made it into §8 and §0.
 
+**The list itself is optional; its absence is not silent.** Three paths, all ending in a `state/recall_check.json` record, which `validate_report.py` requires in every run:
+
+1. **Sealed file** (default): operator fills it before the run; graded by `recall_check.py` at P4.
+2. **Held back**: operator deletes the file and pastes the list when asked at P4; graded with `recall_check.py --paste <file>`. Strongest against leakage — the list never touches the run's disk.
+3. **No list**: the operator genuinely knows of no related work. Record it with `recall_check.py --none`. The run then has **no external calibration** — every coverage statement in the report is the run grading itself — and §8 must say exactly that, with §0 confidence stated accordingly. Do not invent a list to avoid this disclosure, and do not let the disclosure's absence pass: an uncalibrated report that admits it is honest; one that doesn't is the failure §13.2 exists to prevent.
+
 If you would rather not trust the seal, hold the list yourself and paste it when the agent reaches P4 and asks.
 
 ### 0.2 Steering channel

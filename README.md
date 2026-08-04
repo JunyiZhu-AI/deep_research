@@ -218,8 +218,12 @@ visible. Anything you knew that the search missed is a coverage failure — the
 report validator blocks delivery unless every miss appears in §8 and lowers
 the confidence stated in §0.
 
-If the seal makes you uneasy, delete the file and paste the list yourself when
-the agent asks.
+The list is optional, with three paths: fill the sealed file; delete it and
+paste the list yourself when the agent asks at P4 (graded with `--paste`, and
+the list never touches the run's disk); or, if you know of no related work,
+the agent records `--none` and the report must then disclose that the run had
+no external calibration. What is not allowed is silence — the report validator
+requires the recall record in every run.
 
 ### Steering mid-run
 

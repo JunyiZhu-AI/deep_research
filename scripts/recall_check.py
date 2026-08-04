@@ -174,15 +174,49 @@ def main():
     ap.add_argument("--operator-override", action="store_true",
                     help="run despite failing gates. For the OPERATOR. An "
                          "agent using this to peek early is violating §0.1.")
+    ap.add_argument("--paste", default=None, metavar="FILE",
+                    help="grade an operator-pasted list at P4 instead of the "
+                         "sealed file (the held-back-list option)")
+    ap.add_argument("--none", dest="none_provided", action="store_true",
+                    help="record that the operator has no list. The run then "
+                         "has NO external calibration, and the report must "
+                         "say so -- this flag makes the absence auditable "
+                         "instead of silent.")
     args = ap.parse_args()
     root = args.run_root
 
+    if args.none_provided:
+        doc = {
+            "computed": datetime.now(timezone.utc).isoformat(),
+            "source": "none_provided",
+            "total": 0, "n_found": 0, "n_missed": 0, "recall": None,
+            "found": [], "missed": [],
+            "note": ("Operator provided no recall list. The run has no "
+                     "external calibration: every statement about its own "
+                     "coverage is self-graded. §8 must disclose this and "
+                     "§0 confidence must not lean on coverage claims no one "
+                     "outside the run checked (§13.2)."),
+        }
+        out = os.path.join(root, "state", "recall_check.json")
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=2, ensure_ascii=False)
+        print("[recall_check] recorded: no external calibration. "
+              "Disclose in §8 (validate_report checks).")
+        print(f"written: {out}")
+        return 0
+
+    source = "sealed_file"
     sealed = os.path.join(root, "SEALED_recall_check.md")
-    if not os.path.exists(sealed):
+    if args.paste:
+        sealed, source = args.paste, "operator_pasted"
+        if not os.path.exists(sealed):
+            print(f"[recall_check] no file at {args.paste}")
+            return 2
+    elif not os.path.exists(sealed):
         print("[recall_check] no SEALED_recall_check.md -- the operator held "
-              "the list back (README option). Ask for it and record the "
-              "answers in state/recall_check.json manually, marked "
-              '"source": "operator_pasted".')
+              "the list back (README option). Ask them for it, save it to a "
+              "file, and rerun with --paste <file>. If they have no list at "
+              "all, rerun with --none so the absence is recorded, not silent.")
         return 2
 
     # --- guard: P4 comes after the loop, and the loop ends when gates pass.
@@ -204,11 +238,14 @@ def main():
               f"{', '.join(failing[:6])}")
 
     # --- tamper anchor: hash now vs. hash the ledger recorded at round 1.
-    cur_hash = sha256_file(sealed)
-    ledger = read_jsonl(os.path.join(root, "state", "ledger.jsonl"))
-    anchor = next((row.get("sealed_sha256") for row in ledger
-                   if row.get("sealed_sha256")), None)
-    hash_consistent = (anchor == cur_hash) if anchor else None
+    # Only meaningful for the sealed file; a pasted list was never on disk.
+    cur_hash, anchor, hash_consistent = None, None, None
+    if source == "sealed_file":
+        cur_hash = sha256_file(sealed)
+        ledger = read_jsonl(os.path.join(root, "state", "ledger.jsonl"))
+        anchor = next((row.get("sealed_sha256") for row in ledger
+                       if row.get("sealed_sha256")), None)
+        hash_consistent = (anchor == cur_hash) if anchor else None
 
     items = parse_sealed(sealed)
     candidates = load_candidates(root)
@@ -224,7 +261,7 @@ def main():
 
     doc = {
         "computed": datetime.now(timezone.utc).isoformat(),
-        "source": "sealed_file",
+        "source": source,
         "total": len(items), "n_found": len(found), "n_missed": len(missed),
         "recall": round(len(found) / len(items), 3) if items else None,
         "found": found, "missed": missed,
@@ -258,6 +295,9 @@ def main():
         print(f"\n  {len(missed)} miss(es): each lowers every confidence in "
               "the report (§13.2), and each needs a logged explanation of why "
               "the search missed it (§22).")
+    if not items:
+        print("\n  note: the list is EMPTY -- the run has no external "
+              "calibration. §8 must disclose this (validate_report checks).")
     print(f"\nwritten: {out}")
     return 0
 

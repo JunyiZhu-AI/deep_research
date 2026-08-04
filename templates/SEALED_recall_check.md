@@ -13,7 +13,11 @@ knew that the search missed is a coverage failure, gets reported in §8, and
 lowers the confidence of the whole verdict (MANUAL §13.2).
 
 If you would rather not trust the seal, delete this file and paste the list
-yourself when the agent reaches P4.
+yourself when the agent reaches P4 (it grades it with `--paste`).
+
+If you genuinely know of no related work, leave this empty or delete it — the
+run will then record that it had no external calibration, and the report must
+disclose that. An empty list is honest; a padded one poisons the measure.
 
 ---
 
