@@ -39,3 +39,9 @@ this file nearly empty. Add only scope constraints (e.g., "focus on the
 efficiency claims", "descend no earlier than 2020"). Do NOT list follow-up
 works you know — those go in the sealed file, where they become the coverage
 check.
+
+Concept (`--concept`): the term IS the brief. Say where you heard it (a talk,
+a thread, a paper title) — the context helps disambiguation — and any scope
+constraint. Do NOT name papers you have heard associated with it — those go
+in the sealed file, and whether the run finds them on its own is exactly the
+coverage measure.

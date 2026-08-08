@@ -336,6 +336,29 @@ def check_completeness(md, sections, root, d):
                 d.add("claim_not_in_scoreboard", cl,
                       "claim absent from the §0 scoreboard — every claim's "
                       "fate is the verdict (§23.4)")
+    elif mode == "concept":
+        # §23.5 — origin lineage and reading path are mandatory; the
+        # disambiguation is mandatory exactly when the name has >1 sense.
+        _require_subsection(md, r"^###\s+Origin\b", "§1",
+                            "origin_missing",
+                            "concept runs must trace the origin and pre-name "
+                            "lineage (§23.5)", d)
+        _require_subsection(md, r"^###\s+Reading path\b", "§7",
+                            "reading_path_missing",
+                            "concept runs must give the foundations → "
+                            "canonical → frontier reading path (§23.5)", d)
+        res_path = os.path.join(root, "state", "concept_resolution.json")
+        try:
+            with open(res_path, encoding="utf-8") as fh:
+                senses = json.load(fh).get("senses") or []
+        except (json.JSONDecodeError, OSError):
+            senses = []
+        if len(senses) > 1:
+            _require_subsection(md, r"^###\s+Disambiguation\b", "§1",
+                                "disambiguation_missing",
+                                f"the term has {len(senses)} confirmed senses "
+                                "and the report must lead with the split "
+                                "(§23.5)", d)
 
 
 def main():

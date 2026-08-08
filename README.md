@@ -171,6 +171,16 @@ python3 scripts/init_run.py --slug follow-up --anchor https://arxiv.org/abs/XXXX
 # strength, citations, venue, author standing) for reading order and
 # corroboration thresholds — never for exclusion.
 python3 scripts/init_run.py --slug attention-retro --subject https://arxiv.org/abs/1706.03762
+
+# concept: a term you heard and half-know. The run first RESOLVES the name —
+# one thing or several, its aliases, what it was called before, who coined it
+# — then consolidates the concept and its full neighborhood (rivals, siblings,
+# predecessors) into one map. Every claimed property is graded against
+# retrieved evidence: replicated / demonstrated / contested / refuted /
+# folklore — the last being the mode's reason to exist: a property everyone
+# repeats and nobody has shown. The verdict page is an orientation briefing
+# with the 3 papers to read first.
+python3 scripts/init_run.py --slug specdec --concept "speculative decoding"
 ```
 
 ---

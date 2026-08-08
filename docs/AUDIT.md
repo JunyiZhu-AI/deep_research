@@ -388,6 +388,15 @@ in it is load-bearing in a way an ordinary README's is not.
   claims, but nothing mechanical verifies the three passes were independent
   or happened at all — the same enforcement gap R1 documented for §13.1
   itself.
+- **The §23.5 concept gates prove search, not understanding.** Alias coverage
+  is a substring match over logged queries — a token query containing the
+  alias satisfies it without engaging the literature. Sense confirmation and
+  sibling cards are agent-tagged lists cross-checked only for existence on
+  disk; whether the card actually *uses* that sense is checked by nothing but
+  the §12.2 fidelity audit, which does not currently sample for it. The
+  disjoint-author test for `replicated` sees author strings only: the same
+  group under different spellings, or serial collaborators publishing
+  separately, both evade it.
 - **recall_check.py grades the seal mechanically, but its matcher can flatter
   in both directions.** Title-token containment at 0.6 can call an item found
   when the corpus merely holds a similarly-titled paper (overstating recall,

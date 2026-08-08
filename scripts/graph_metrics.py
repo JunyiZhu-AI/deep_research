@@ -72,6 +72,15 @@ CLAIM_FATES = {"held", "disputed", "overturned", "developed", "varied",
 STRENGTH_W = {"strong": 1.0, "moderate": 0.6, "weak": 0.3}
 EVIDENCE_W = {"benchmark": 1.0, "ablation": 1.0, "theory": 0.8, "anecdote": 0.4}
 
+# §23.5 concept mode.
+SENSE_CONFIRM_MIN = 2         # retrieved uses per sense
+ALIAS_QUERIES_MIN = 2         # logged queries containing each alias
+SIBLING_CARDS_MIN = 3         # digested cards per sibling concept
+SIBLINGS_MIN = 2
+PROPERTY_CHECK_QUERIES_MIN = 5
+PROPERTY_STATUSES = {"replicated", "demonstrated", "contested", "refuted",
+                     "folklore"}
+
 HIGH_CONSEQUENCE_EDGES = {
     "subsumes", "equivalent", "special_case_of", "reinvents", "contradicts",
 }
@@ -535,7 +544,7 @@ def load_mode(root):
     """§23.0 — state/mode.json is the single source of truth; absent = fresh."""
     doc = read_json(os.path.join(root, "state", "mode.json"), {})
     if doc.get("mode") not in ("fresh", "incremental", "anchored",
-                               "retrospective"):
+                               "retrospective", "concept"):
         return {"mode": "fresh"}
     return doc
 
@@ -743,6 +752,151 @@ def claim_coverage(root, cards_by_id, mode_doc, author_counts):
 
     detail = {"claims": detail_claims, "fates_file_present": bool(fates),
               "problems": problems[:12]}
+    return not problems, detail
+
+
+def resolution_coverage(root, cards_by_id, mode_doc):
+    """§23.5 — memory proposes the resolution; only retrieval keeps it.
+
+    Every sense confirmed by retrieved uses, every alias actually searched,
+    the origin on disk with a date. An unresolved concept fails closed."""
+    problems = []
+    res = read_json(os.path.join(root, "state", "concept_resolution.json"), {})
+    if not res:
+        problems.append("state/concept_resolution.json not written (P0)")
+    queries = [(q.get("query") or "").lower()
+               for q in read_jsonl(os.path.join(root, "state",
+                                                "seen_queries.jsonl"))]
+    senses = res.get("senses") or []
+    if res and not senses:
+        problems.append("no senses recorded — what does the term denote?")
+    for s in senses:
+        sid = s.get("id", "?")
+        confirmed = [c for c in (s.get("confirmed_by") or [])
+                     if c in cards_by_id]
+        if len(confirmed) < SENSE_CONFIRM_MIN:
+            problems.append(f"sense {sid}: {len(confirmed)} confirming cards "
+                            f"on disk (need {SENSE_CONFIRM_MIN})")
+    for alias in res.get("aliases") or []:
+        n = sum(1 for q in queries if alias.lower() in q)
+        if n < ALIAS_QUERIES_MIN:
+            problems.append(f"alias {alias!r} in {n} logged queries "
+                            f"(need {ALIAS_QUERIES_MIN})")
+    origin = (res.get("origin") or {}).get("earliest_known") or {}
+    if not origin.get("node"):
+        problems.append("origin.earliest_known.node not set")
+    elif origin["node"] not in cards_by_id:
+        problems.append(f"origin node {origin['node']!r} not on disk")
+    elif not origin.get("date"):
+        problems.append("origin.earliest_known.date missing — priority "
+                        "cannot be judged")
+    detail = {"senses": len(senses), "aliases": len(res.get("aliases") or []),
+              "origin": origin.get("node"), "problems": problems[:10]}
+    return not problems, detail
+
+
+def neighborhood_coverage(root, cards_by_id, mode_doc):
+    """§23.5 — a concept is only understood relative to its alternatives."""
+    problems = []
+    res = read_json(os.path.join(root, "state", "concept_resolution.json"), {})
+    sibs = res.get("siblings") or []
+    queries = [(q.get("query") or "").lower()
+               for q in read_jsonl(os.path.join(root, "state",
+                                                "seen_queries.jsonl"))]
+    if not sibs:
+        just = (res.get("siblings_none_justification") or "").strip()
+        if len(just) < 30:
+            problems.append("no siblings and no substantive "
+                            "siblings_none_justification — a concept with no "
+                            "neighborhood is rare enough to argue for")
+    elif len(sibs) < SIBLINGS_MIN:
+        problems.append(f"{len(sibs)} sibling(s) mapped "
+                        f"(need {SIBLINGS_MIN}, or a justification)")
+    for s in sibs:
+        name = s.get("name", "?")
+        cards = [c for c in (s.get("cards") or []) if c in cards_by_id]
+        if len(cards) < SIBLING_CARDS_MIN:
+            problems.append(f"sibling {name!r}: {len(cards)} digested cards "
+                            f"on disk (need {SIBLING_CARDS_MIN})")
+        n = sum(1 for q in queries if name.lower() in q)
+        if n < ALIAS_QUERIES_MIN:
+            problems.append(f"sibling {name!r} in {n} logged queries "
+                            f"(need {ALIAS_QUERIES_MIN})")
+    detail = {"siblings": [s.get("name") for s in sibs],
+              "problems": problems[:10]}
+    return not problems, detail
+
+
+def property_coverage(root, cards_by_id, mode_doc, author_counts):
+    """§23.5 — what the name's reputation rests on, graded not assumed.
+
+    `folklore` carries proof of search; `replicated` requires disjoint author
+    groups (popularity is never evidence — banned behavior 48)."""
+    problems = []
+    facets = mode_doc.get("facets") or []
+    ev_doc = read_json(os.path.join(root, "state", "property_evidence.json"),
+                       {})
+    if not facets:
+        problems.append("mode.json facets is empty; fill it after P0")
+
+    per_facet_checks = defaultdict(set)
+    for q in read_jsonl(os.path.join(root, "state", "seen_queries.jsonl")):
+        if q.get("role") == "property_check" and q.get("claim"):
+            key = (q.get("query") or "").strip().lower()
+            if key:
+                per_facet_checks[q["claim"]].add(key)
+
+    def authors_of(node):
+        return {str(a).strip().lower()
+                for a in ((cards_by_id.get(node) or {}).get("bib") or {})
+                .get("authors", []) or []}
+
+    detail_facets = {}
+    for fid in facets:
+        rec = ev_doc.get(fid) or {}
+        status = rec.get("status")
+        ev = [e for e in (rec.get("evidence") or [])
+              if e.get("node") in cards_by_id]
+        confirming = [e for e in ev if e.get("relation") != "contradicts"]
+        contradicting = [e for e in ev if e.get("relation") == "contradicts"]
+        if not status:
+            problems.append(f"{fid}: no status in property_evidence.json")
+        elif status not in PROPERTY_STATUSES:
+            problems.append(f"{fid}: status {status!r} not in the §23.5 "
+                            "taxonomy")
+        elif status == "replicated":
+            groups = [authors_of(e["node"]) for e in confirming]
+            disjoint = any(a and b and not (a & b)
+                           for i, a in enumerate(groups)
+                           for b in groups[i + 1:])
+            if len(confirming) < 2 or not disjoint:
+                problems.append(f"{fid}: replicated needs >=2 confirming "
+                                "cards with disjoint author lists")
+        elif status == "demonstrated":
+            if not confirming:
+                problems.append(f"{fid}: demonstrated without a confirming "
+                                "card on disk")
+        elif status == "contested":
+            if not contradicting:
+                problems.append(f"{fid}: contested without a contradicting "
+                                "card on disk")
+        elif status == "refuted":
+            strong = [e for e in contradicting
+                      if reliability(cards_by_id[e["node"]], author_counts)
+                      >= OVERTURN_RELIABILITY_MIN]
+            if len(contradicting) < 2 and not strong:
+                problems.append(f"{fid}: refuted needs >=2 contradicting "
+                                "cards or 1 at reliability >= "
+                                f"{OVERTURN_RELIABILITY_MIN}")
+        elif status == "folklore":
+            n = len(per_facet_checks.get(fid, set()))
+            if n < PROPERTY_CHECK_QUERIES_MIN:
+                problems.append(f"{fid}: folklore with {n} distinct "
+                                "property_check queries (need "
+                                f"{PROPERTY_CHECK_QUERIES_MIN})")
+        detail_facets[fid] = {"status": status, "evidence_n": len(ev),
+                              "checks": len(per_facet_checks.get(fid, set()))}
+    detail = {"facets": detail_facets, "problems": problems[:12]}
     return not problems, detail
 
 
@@ -967,6 +1121,27 @@ def main():
                                    "threshold": "every claim: evidence-backed "
                                                 "fate per §23.4 minimums",
                                    "pass": cc_ok}
+    elif mode == "concept":
+        cards_by_id = {c.get("id"): c for c in cards if c.get("id")}
+        author_counts = author_presence_counts(cards)
+        rs_ok, rs_detail = resolution_coverage(root, cards_by_id, mode_doc)
+        gates["resolution_coverage"] = {
+            "value": rs_detail,
+            "threshold": f"every sense >={SENSE_CONFIRM_MIN} cards, every "
+                         f"alias >={ALIAS_QUERIES_MIN} queries, origin on disk",
+            "pass": rs_ok}
+        nb_ok, nb_detail = neighborhood_coverage(root, cards_by_id, mode_doc)
+        gates["neighborhood_coverage"] = {
+            "value": nb_detail,
+            "threshold": f">={SIBLINGS_MIN} siblings x "
+                         f">={SIBLING_CARDS_MIN} cards, or justified absence",
+            "pass": nb_ok}
+        pc_ok, pc_detail = property_coverage(root, cards_by_id, mode_doc,
+                                             author_counts)
+        gates["property_coverage"] = {
+            "value": pc_detail,
+            "threshold": "every facet: graded status per §23.5 minimums",
+            "pass": pc_ok}
     all_pass = all(gate["pass"] for gate in gates.values())
 
     # --- guidance: the failing gate drives next round's assignment mix (§12)
@@ -1015,6 +1190,12 @@ def main():
         guidance.append({"gate": "claim_coverage",
                          "action": "adjudicate_claim_fates",
                          "targets": gates["claim_coverage"]["value"]["problems"][:4]})
+    for cg, action in (("resolution_coverage", "confirm_concept_resolution"),
+                       ("neighborhood_coverage", "digest_sibling_concepts"),
+                       ("property_coverage", "grade_property_evidence")):
+        if cg in gates and not gates[cg]["pass"]:
+            guidance.append({"gate": cg, "action": action,
+                             "targets": gates[cg]["value"]["problems"][:4]})
 
     undigested_central = sorted(
         ({"id": n["id"], "pagerank": cent.get(n["id"], {}).get("pagerank", 0)}

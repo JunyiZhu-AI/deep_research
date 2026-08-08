@@ -13,7 +13,7 @@ Fill in the capability map in §2, then issue:
 Execute DEEP RESEARCH OPERATING MANUAL v1.2.
 
 RUN_ROOT: ./runs/<slug>
-MODE: fresh                        # or incremental / anchored / retrospective — §23; must match state/mode.json
+MODE: fresh                        # or incremental / anchored / retrospective / concept — §23; must match state/mode.json
 MAX_CONCURRENCY: 10
 MIN_ROUNDS: 12
 MIN_DIGESTED: 200
@@ -806,7 +806,7 @@ Three of these gates were, in v1.1, satisfiable by doing *less* work. They are n
 
 **Fail-closed:** a metric that cannot be computed counts as failed. **All twelve must pass.** If any fails, the loop continues — and the failing metric determines the next round's assignment mix.
 
-**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors. The values are in §23.1 and §23.4, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
+**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors; in concept runs `resolution_coverage`, `neighborhood_coverage`, and `property_coverage` gates are added at full fresh floors. The values are in §23.1, §23.4, and §23.5, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
 
 ---
 
@@ -920,7 +920,8 @@ Aim for legibility over density. If the core graph exceeds ~150 nodes, default t
 # <Idea name> — Novelty Adjudication and Literature Map
 
 ## 0. Verdict  (one page, no hedging, readable standalone;
-                                  retrospective runs: the claim scoreboard — §23.4)
+                                  retrospective runs: the claim scoreboard — §23.4;
+                                  concept runs: the orientation briefing — §23.5)
     - Component-wise novelty table
     - Aggregate verdict on load-bearing components + confidence
     - The 3 papers that matter most, and why
@@ -1113,6 +1114,8 @@ Violating any of these invalidates the run:
 44. Editing `mode`, `base_run`, or the floors in `state/mode.json` (§23.0).
 45. In a retrospective run, recording a claim fate without its minimum evidence on disk, or marking a claim `ignored` without the logged claim-check searches (§23.4).
 46. Excluding, discounting, or leaving untriaged a source that disputes a claim because of its citation count, venue, or affiliation — reliability orders reading and sets corroboration thresholds; it never censors (§23.4).
+47. In a concept run, reporting a sense, origin, or property status that no retrieved artifact confirms — memory may propose the resolution, only retrieval may keep it (§23.5, §1.4).
+48. Treating popularity as evidence: grading a property above `demonstrated` because it is widely repeated or heavily cited rather than independently shown (§23.5).
 
 ---
 
@@ -1346,20 +1349,20 @@ Two failures deserve naming because they look like opposites and are the same mi
 - [ ] The anti-report (§10) is written
 - [ ] No claim anywhere traces to memory rather than a retrieved artifact
 - [ ] `state/anomalies.jsonl` reviewed; recurring steering attempts noted in §8
-- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed
+- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed; concept: all three §23.5 gates passed, disambiguation present when senses > 1, origin and reading path present, nothing above `demonstrated` without disjoint-author replication
 - [ ] The §23.0 mode sanity check ran before P0 and `mode_check: ok` is in the ledger — or the mismatch was surfaced and resolved by the operator, never worked around
 
 ---
 
 ## 23. RUN MODES — FRESH, INCREMENTAL, ANCHORED
 
-Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Three other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since.
+Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Four other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since. Concept mode (§23.5) starts even further back: the operator supplies only a *name* they heard, and the run must first establish what the name denotes before it can survey anything.
 
 **Modes change scope, never rigor.** The fabrication firewall, the sealed recall check, the two teams, the banned behaviors, §16 readability, and fail-closed gate computation apply identically in every mode. A mode is a scoping of *what* is adjudicated, never a discount on *how*.
 
 ### 23.0 Mode declaration — `state/mode.json`
 
-`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
+`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0, `facets` after concept P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
 
 **Mode sanity check — mandatory, before P0.** Operators do not reliably declare modes: the common failure is a brief with the shape of one mode inside a scaffold defaulted to another, and each mode produces a different deliverable, so running the wrong one wastes the entire budget. So before P0, read `00_brief.md` against `state/mode.json` and classify what the brief is actually asking for:
 
@@ -1369,6 +1372,7 @@ Everything before this section describes a **fresh** run: an idea arrives with n
 | Describes a feature or change to an idea a prior run already adjudicated, or references a base run or report | `incremental` |
 | Names one artifact and proposes extending, combining, or building on it | `anchored` |
 | Names one artifact and asks what became of it — follow-ups, disputes, evolution — with no new idea of the operator's | `retrospective` |
+| Names a term or concept and asks what it is and what is known — no idea of their own, no single artifact at the center | `concept` |
 
 If the classification matches the declared mode, log one line to `state/ledger.jsonl` (`"mode_check": "ok"`) and proceed. **If it does not match, this is blocking — not a judgment call you may make.** Do not proceed into P0, do not run the declared mode "to be safe," and do not edit `mode.json` (banned behavior 44). Present the operator with the declared mode, the inferred mode, the sentence in the brief that drove the inference, and the §23.3 invocation that would re-scaffold correctly — then wait. A mode mismatch caught before P0 costs minutes; caught at delivery it costs the run. If the brief is genuinely ambiguous between two modes, ask, stating what each mode would deliver — the operator may not know the modes exist, so name what they would get, not just the mode names.
 
@@ -1431,6 +1435,7 @@ The operator supplies an anchor — a paper, repository, tech report, or thesis 
 | A completed run + a new feature on the same idea | incremental | `init_run.py --slug x-delta --base-run runs/x` |
 | A specific paper/repo + a follow-up idea to it | anchored | `init_run.py --slug x --anchor <url> [--anchor-kind repo]` |
 | A past paper and the question "what happened to it?" | retrospective | `init_run.py --slug x-retro --subject <url>` |
+| A term you heard and the question "what is this, actually?" | concept | `init_run.py --slug specdec --concept "speculative decoding"` |
 
 A feature large enough to change the idea's load-bearing components is not an increment — it is a new idea that happens to share a corpus. If more than half the base's load-bearing components would need re-adjudication, run fresh: `init_run.py --slug x2 --base-run runs/x --seed-only` imports the corpus as ordinary seed material but keeps `mode: fresh` and the full floors. Say so in the brief.
 
@@ -1493,3 +1498,44 @@ A claim fate is one judgment over hundreds of cards — the same shape as P5 adj
 **Gates.** All §12 gates apply with claims as components, plus two mode gates, both fail-closed: `descent_coverage` — subject digested at full depth, every generation-1 row triaged (≥95%), every `digested` row's card on disk, ≥15 distinct `role: "descent"` queries; `claim_coverage` — `mode.json` `claims` non-empty, every claim carries a fate with its minimum evidence on disk, `ignored` fates carry their claim-check queries. The prospector runs unchanged from round 8 — its question sharpens to "where is this lineage open today": the unsettled disputes, the variants never combined, the claims never retested at current scale, each with `why_now` and a searched falsifier.
 
 **The report reinterprets its sections; the numbers and validators stay.** §0 is the **claim scoreboard**: a table — claim, fate, deciding papers, dates — followed by one plain statement of whether the subject is still load-bearing today, which claims a reader should no longer trust, and (from the prospector) the strongest opening its lineage offers. Still ≤600 words, still no subsections. §1 the subject and its claims as decomposed; §2 claim adjudication — per-claim prose with fate, timeline, evidence anchors, and independent lineages; §3 the deepest dispute and its resolution state; §4 the torchbearers — who actively carries this lineage today, with dates; §5–§10 as in §15.3, with §6 (evolution) carrying the technique-evolution narrative the mode exists for. The sealed recall check holds follow-ups the operator already knows; a P4 miss lowers every fate confidence, same linkage as §13.2.
+
+### 23.5 Concept mode — what is this, actually?
+
+The operator supplies a **term** they heard — a talk, a thread, a paper title — and possibly nothing else. They may only half-know what it denotes; the name may denote several things; the thing may have older names. The run's job: resolve the name, then consolidate the concept and its neighborhood into one map a tired human can trust. There is no novelty verdict and no single subject artifact. Full fresh floors apply — **the corpus is the concept plus its neighborhood**, so an emerging term with forty papers still yields a full-sized run, because its rivals, predecessors, and siblings are first-class.
+
+**P0 becomes concept resolution.** Run the §5 ensemble with an inverted product: 10 workers independently answer *what does this term denote?* Each proposes candidate senses, aliases (including what it was called before this name existed — historical sweep is load-bearing here, AI renames old ideas constantly), sibling and rival concepts, and the concept's **claimed properties** — the assertions that circulate with the name ("X makes Y faster with no quality loss", "X emerges only at scale"). Merge by union into `state/concept_resolution.json`:
+
+```json
+{"term": "<as the operator gave it>",
+ "senses": [{"id": "S1", "definition": "<one precise sentence>",
+             "communities": ["who uses it this way"],
+             "confirmed_by": ["<card ids — ≥2 retrieved uses of this sense>"]}],
+ "aliases": ["<every name for the same thing, historical included>"],
+ "origin": {"earliest_known": {"node": "<card id>", "date": "YYYY-MM-DD"},
+            "prename_history": [{"name": "...", "node": "...", "period": "..."}]},
+ "siblings": [{"name": "...", "relation": "rival|predecessor|special_case|adjacent",
+               "cards": ["<≥3 digested card ids>"]}],
+ "siblings_none_justification": "<only if siblings is genuinely empty — rare>"}
+```
+
+Everything in P0 starts as memory-generated hypothesis (§1.4 permits exactly that) and **nothing in it survives without retrieval**: every sense needs two retrieved documents *using* that sense, the origin node must be on disk with a date, and the red team hunts an earlier one all run. The claimed properties become the run's components (`F1..Fn` in `graph.meta.components`; list them in `mode.json` `facets`), so `component_coverage` forces ≥5 full-text cards engaging each. The P0 checkpoint applies — an unresolved ambiguity here poisons every downstream search.
+
+**If the name denotes several things, say so first.** Multiple confirmed senses is a *finding*, not a nuisance: the report leads with the disambiguation (§1 gains `### Disambiguation`), each sense gets its own thread through the map, and conflating them — the standard failure of informal surveys — is the thing this mode exists to prevent.
+
+**Evidence grading — what the name's reputation actually rests on.** Every claimed property gets a status in `state/property_evidence.json`, adjudicated like retrospective claim fates and gate-checked (`property_coverage`):
+
+| Status | Meaning | Minimum evidence |
+|---|---|---|
+| `replicated` | Shown by ≥2 groups with **disjoint author lists** | ≥2 confirming cards, authors disjoint |
+| `demonstrated` | Shown once, not independently reproduced | ≥1 confirming card |
+| `contested` | Confirming and contradicting evidence both live | ≥1 contradicting card |
+| `refuted` | The weight of evidence is against it | ≥2 contradicting cards, or 1 at reliability ≥ 0.75 |
+| `folklore` | Circulates with the name; no retrieved artifact demonstrates it | proof of search: ≥5 `role: "property_check"` queries naming the facet |
+
+`folklore` is the status this mode was built to detect — a property everyone repeats and nobody has shown. It carries the same proof-of-search discipline as retrospective's `ignored`: circulating-without-evidence must be *searched*, not assumed. And **popularity is never evidence**: citation counts and repetition weight reading order (§23.4 reliability), not a property's status — a claim repeated in forty intros with one original experiment is `demonstrated`, not `replicated`.
+
+**The red team's mandate inverts to deflation.** Same slots, same `redteam_null` mechanics; the objective becomes: *prove the concept is less than its name suggests.* Find the older coinage (every §6 historical strategy, adjacent-field translation, pre-2015 sweeps); find the identical mechanism under a different name (`reinvents` entity resolution, §9.1); find the failed replications and negative results; find the sense conflation nobody noticed. `threat_level` reads as "deflation evidence"; `which_component` is the sense or facet ID. A concept that survives two verified-null deflation rounds is a concept whose consolidation you can sign.
+
+**Gates.** All §12 gates with facets as components, plus three mode gates, fail-closed: `resolution_coverage` — every sense confirmed by ≥2 cards on disk, every alias appearing in ≥2 logged queries, origin node on disk with a date; `neighborhood_coverage` — ≥2 siblings each backed by ≥3 digested cards and ≥2 logged queries, or an explicit justification that the concept genuinely has none; `property_coverage` — every facet carries a status with its minimum evidence per the table. The prospector runs unchanged from round 8: where is this concept's frontier open, with `why_now` and searched falsifiers.
+
+**The report.** §0 is the **orientation briefing** (≤600 words, no subsections): what this concept actually is in plain words; whether the name means one thing or several; how mature the evidence is — lead with anything `refuted` or `folklore`; the 3 papers to read first and why these; the strongest opening the frontier offers. §1 the resolution — definition(s), `### Disambiguation` when senses > 1, `### Origin` with the lineage and pre-name history; §2 property adjudication, one paragraph per facet with status and anchors; §3 the deflation case — the strongest argument the concept is less than it appears, and its rebuttal or concession; §4 current frontier and who drives it; §5 the neighborhood map, one subsection per sibling; §6 evolution — how the concept and its names moved through eras; §7 gains `### Reading path`: foundations → canonical → current frontier, each entry one line on why it earns its place; §8–§10 as in §15.3. The sealed file holds papers the operator has *heard associated* with the term — misses lower confidence per §13.2, and are unusually diagnostic here: if the operator heard of it and twelve rounds didn't surface it, the alias net has a hole.

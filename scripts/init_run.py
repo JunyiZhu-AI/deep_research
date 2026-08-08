@@ -33,6 +33,9 @@ graph_metrics.py, round.py, and validate_report.py read:
 
     # retrospective: what happened to this paper — claims, descent, evolution
     python3 scripts/init_run.py --slug attention-retro --subject https://arxiv.org/abs/1706.03762
+
+    # concept: a term you heard — resolve it, map it, grade its claims
+    python3 scripts/init_run.py --slug specdec --concept "speculative decoding"
 """
 
 import argparse
@@ -300,11 +303,15 @@ def main():
                     help="URL of the paper to run a retrospective on; sets "
                          "mode: retrospective (MANUAL §23.4)")
     ap.add_argument("--subject-kind", default="paper", choices=ANCHOR_KINDS)
+    ap.add_argument("--concept", default=None, metavar="TERM",
+                    help="a term to resolve and consolidate; sets mode: "
+                         "concept (MANUAL §23.5)")
     args = ap.parse_args()
 
-    if sum(bool(x) for x in (args.base_run, args.anchor, args.subject)) > 1:
-        sys.exit("[init] --base-run, --anchor, and --subject are mutually "
-                 "exclusive; pick one mode (MANUAL §23.3).")
+    if sum(bool(x) for x in (args.base_run, args.anchor, args.subject,
+                             args.concept)) > 1:
+        sys.exit("[init] --base-run, --anchor, --subject, and --concept are "
+                 "mutually exclusive; pick one mode (MANUAL §23.3).")
     if args.seed_only and not args.base_run:
         sys.exit("[init] --seed-only requires --base-run.")
     if args.base_run and not os.path.isdir(args.base_run):
@@ -366,6 +373,16 @@ def main():
                     "(§23.0).",
         }
         os.makedirs(os.path.join(run, "state", "descent"), exist_ok=True)
+    elif args.concept:
+        mode_doc = {
+            "mode": "concept",
+            "declared": now,
+            "concept": {"term": args.concept},
+            "facets": [],
+            "note": "Agent fills facets after P0 (claimed properties, F1..) "
+                    "and writes state/concept_resolution.json (MANUAL §23.5). "
+                    "mode is operator-owned (§23.0).",
+        }
     else:
         mode_doc = {"mode": "fresh", "declared": now}
         if args.seed_only:
@@ -494,11 +511,14 @@ def main():
         "anchored": f"the follow-up idea to the anchor ({args.anchor})",
         "retrospective": f"any context on the subject ({args.subject}) — "
                          "the paper itself is the brief",
+        "concept": f"where you heard the term ({args.concept!r}) and any "
+                   "scope constraints — the term itself is the brief",
     }.get(mode, "the idea")
     sealed_what = {
         "incremental": "prior art you know about the FEATURE",
         "anchored": "prior art you know about the FOLLOW-UP",
         "retrospective": "follow-up works you already know about",
+        "concept": "papers you have HEARD associated with the term",
     }.get(mode, "prior art you already know")
     print(f"""
 Mode: {mode}  (state/mode.json — MANUAL §23)
@@ -537,6 +557,20 @@ Retrospective specifics (MANUAL §23.4):
   - The claim_coverage gate fails until every claim has an evidence-backed
     fate in state/claim_fates.json. 'ignored' needs logged claim_check
     searches; 'overturned' needs corroboration (MANUAL §23.4).""")
+    elif mode == "concept":
+        print("""
+Concept specifics (MANUAL §23.5):
+  - P0 resolves the term: senses, aliases, origin, siblings, claimed
+    properties -> state/concept_resolution.json. Memory proposes;
+    only retrieval keeps (banned 47).
+  - Claimed properties become components; list their IDs (F1..) in
+    state/mode.json facets.
+  - Three gates fail until: every sense is confirmed by >=2 cards and the
+    origin is on disk (resolution_coverage); >=2 siblings are digested or
+    their absence justified (neighborhood_coverage); every property has a
+    graded status in state/property_evidence.json (property_coverage).
+    'folklore' needs logged property_check searches; 'replicated' needs
+    disjoint author groups.""")
     print()
     return 1 if missing_crit else 0
 
