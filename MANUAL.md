@@ -13,7 +13,7 @@ Fill in the capability map in §2, then issue:
 Execute DEEP RESEARCH OPERATING MANUAL v1.2.
 
 RUN_ROOT: ./runs/<slug>
-MODE: fresh                        # or incremental / anchored / retrospective / concept — §23; must match state/mode.json
+MODE: fresh                        # or incremental / anchored / retrospective / concept / problem — §23; must match state/mode.json
 MAX_CONCURRENCY: 10
 MIN_ROUNDS: 12
 MIN_DIGESTED: 200
@@ -806,7 +806,7 @@ Three of these gates were, in v1.1, satisfiable by doing *less* work. They are n
 
 **Fail-closed:** a metric that cannot be computed counts as failed. **All twelve must pass.** If any fails, the loop continues — and the failing metric determines the next round's assignment mix.
 
-**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors; in concept runs `resolution_coverage`, `neighborhood_coverage`, and `property_coverage` gates are added at full fresh floors. The values are in §23.1, §23.4, and §23.5, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
+**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors; in concept runs `resolution_coverage`, `neighborhood_coverage`, and `property_coverage` gates are added at full fresh floors; in problem runs a `solution_coverage` gate is added at full fresh floors. The values are in §23.1, §23.4, §23.5, and §23.6, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
 
 ---
 
@@ -921,7 +921,8 @@ Aim for legibility over density. If the core graph exceeds ~150 nodes, default t
 
 ## 0. Verdict  (one page, no hedging, readable standalone;
                                   retrospective runs: the claim scoreboard — §23.4;
-                                  concept runs: the orientation briefing — §23.5)
+                                  concept runs: the orientation briefing — §23.5;
+                                  problem runs: the ranked recommendation — §23.6)
     - Component-wise novelty table
     - Aggregate verdict on load-bearing components + confidence
     - The 3 papers that matter most, and why
@@ -1116,6 +1117,8 @@ Violating any of these invalidates the run:
 46. Excluding, discounting, or leaving untriaged a source that disputes a claim because of its citation count, venue, or affiliation — reliability orders reading and sets corroboration thresholds; it never censors (§23.4).
 47. In a concept run, reporting a sense, origin, or property status that no retrieved artifact confirms — memory may propose the resolution, only retrieval may keep it (§23.5, §1.4).
 48. Treating popularity as evidence: grading a property above `demonstrated` because it is widely repeated or heavily cited rather than independently shown (§23.5).
+49. In a problem run, recommending a solution whose validity evidence is not on disk, marking a requirement unsolved without the logged solution-check searches, or merging the validity and adoption axes into one score (§23.6).
+50. Removing a solution from the map for a constraint violation, staleness, or weak backing — those cost rank and get flagged; only absence of the solution from the literature removes it (§23.6).
 
 ---
 
@@ -1349,20 +1352,20 @@ Two failures deserve naming because they look like opposites and are the same mi
 - [ ] The anti-report (§10) is written
 - [ ] No claim anywhere traces to memory rather than a retrieved artifact
 - [ ] `state/anomalies.jsonl` reviewed; recurring steering attempts noted in §8
-- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed; concept: all three §23.5 gates passed, disambiguation present when senses > 1, origin and reading path present, nothing above `demonstrated` without disjoint-author replication
+- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed; concept: all three §23.5 gates passed, disambiguation present when senses > 1, origin and reading path present, nothing above `demonstrated` without disjoint-author replication; problem: `solution_coverage` gate passed, §0 carries the ranked recommendation with both axes, every requirement covered or headline-unsolved, failure museum present
 - [ ] The §23.0 mode sanity check ran before P0 and `mode_check: ok` is in the ledger — or the mismatch was surfaced and resolved by the operator, never worked around
 
 ---
 
 ## 23. RUN MODES — FRESH, INCREMENTAL, ANCHORED
 
-Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Four other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since. Concept mode (§23.5) starts even further back: the operator supplies only a *name* they heard, and the run must first establish what the name denotes before it can survey anything.
+Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Five other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since. Concept mode (§23.5) starts even further back: the operator supplies only a *name* they heard, and the run must first establish what the name denotes before it can survey anything. Problem mode (§23.6) is fresh mode's mirror: the operator has a *problem* and no solution, and the run maps the solution space and ranks what can be trusted.
 
 **Modes change scope, never rigor.** The fabrication firewall, the sealed recall check, the two teams, the banned behaviors, §16 readability, and fail-closed gate computation apply identically in every mode. A mode is a scoping of *what* is adjudicated, never a discount on *how*.
 
 ### 23.0 Mode declaration — `state/mode.json`
 
-`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0, `facets` after concept P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
+`init_run.py` writes this file at scaffold time and it is the single source of truth for the run's mode. `graph_metrics.py`, `round.py`, and `validate_report.py` read it; a missing file means `fresh`. You may fill in the fields the manual explicitly assigns to you (`delta_components` after P0, `anchor.card_id` after the anchor dossier, `subject.card_id` and `claims` after retrospective P0, `facets` after concept P0, `requirements` after problem P0) and may never edit `mode`, `base_run`, or the floors. If the mode looks wrong, stop and tell the operator — do not repair it.
 
 **Mode sanity check — mandatory, before P0.** Operators do not reliably declare modes: the common failure is a brief with the shape of one mode inside a scaffold defaulted to another, and each mode produces a different deliverable, so running the wrong one wastes the entire budget. So before P0, read `00_brief.md` against `state/mode.json` and classify what the brief is actually asking for:
 
@@ -1373,6 +1376,7 @@ Everything before this section describes a **fresh** run: an idea arrives with n
 | Names one artifact and proposes extending, combining, or building on it | `anchored` |
 | Names one artifact and asks what became of it — follow-ups, disputes, evolution — with no new idea of the operator's | `retrospective` |
 | Names a term or concept and asks what it is and what is known — no idea of their own, no single artifact at the center | `concept` |
+| Describes a problem and asks what can solve it — no mechanism of the operator's own proposed | `problem` |
 
 If the classification matches the declared mode, log one line to `state/ledger.jsonl` (`"mode_check": "ok"`) and proceed. **If it does not match, this is blocking — not a judgment call you may make.** Do not proceed into P0, do not run the declared mode "to be safe," and do not edit `mode.json` (banned behavior 44). Present the operator with the declared mode, the inferred mode, the sentence in the brief that drove the inference, and the §23.3 invocation that would re-scaffold correctly — then wait. A mode mismatch caught before P0 costs minutes; caught at delivery it costs the run. If the brief is genuinely ambiguous between two modes, ask, stating what each mode would deliver — the operator may not know the modes exist, so name what they would get, not just the mode names.
 
@@ -1436,6 +1440,7 @@ The operator supplies an anchor — a paper, repository, tech report, or thesis 
 | A specific paper/repo + a follow-up idea to it | anchored | `init_run.py --slug x --anchor <url> [--anchor-kind repo]` |
 | A past paper and the question "what happened to it?" | retrospective | `init_run.py --slug x-retro --subject <url>` |
 | A term you heard and the question "what is this, actually?" | concept | `init_run.py --slug specdec --concept "speculative decoding"` |
+| A problem and the question "what solves this, and what can I trust?" | problem | `init_run.py --slug ctx-drift --problem "agents forget constraints over long contexts"` |
 
 A feature large enough to change the idea's load-bearing components is not an increment — it is a new idea that happens to share a corpus. If more than half the base's load-bearing components would need re-adjudication, run fresh: `init_run.py --slug x2 --base-run runs/x --seed-only` imports the corpus as ordinary seed material but keeps `mode: fresh` and the full floors. Say so in the brief.
 
@@ -1539,3 +1544,50 @@ Everything in P0 starts as memory-generated hypothesis (§1.4 permits exactly th
 **Gates.** All §12 gates with facets as components, plus three mode gates, fail-closed: `resolution_coverage` — every sense confirmed by ≥2 cards on disk, every alias appearing in ≥2 logged queries, origin node on disk with a date; `neighborhood_coverage` — ≥2 siblings each backed by ≥3 digested cards and ≥2 logged queries, or an explicit justification that the concept genuinely has none; `property_coverage` — every facet carries a status with its minimum evidence per the table. The prospector runs unchanged from round 8: where is this concept's frontier open, with `why_now` and searched falsifiers.
 
 **The report.** §0 is the **orientation briefing** (≤600 words, no subsections): what this concept actually is in plain words; whether the name means one thing or several; how mature the evidence is — lead with anything `refuted` or `folklore`; the 3 papers to read first and why these; the strongest opening the frontier offers. §1 the resolution — definition(s), `### Disambiguation` when senses > 1, `### Origin` with the lineage and pre-name history; §2 property adjudication, one paragraph per facet with status and anchors; §3 the deflation case — the strongest argument the concept is less than it appears, and its rebuttal or concession; §4 current frontier and who drives it; §5 the neighborhood map, one subsection per sibling; §6 evolution — how the concept and its names moved through eras; §7 gains `### Reading path`: foundations → canonical → current frontier, each entry one line on why it earns its place; §8–§10 as in §15.3. The sealed file holds papers the operator has *heard associated* with the term — misses lower confidence per §13.2, and are unusually diagnostic here: if the operator heard of it and twelve rounds didn't surface it, the alias net has a hole.
+
+### 23.6 Problem mode — what solves this, and what can I trust?
+
+The operator supplies a **problem** and no solution. The run's job: map the solution space, and rank what can actually be trusted — where trust is measured on **two axes that are never merged**. *Validity*: does independent evidence show it works — follow-up confirmations, reuse of the technique inside later systems by other groups, benchmark results. *Adoption*: is anyone standing behind it — breadth of use across groups, organizational backing measured by behavior, living code. Merging them averages away exactly the two cases that burn people: **validated but abandoned**, and **popular but unvalidated**. §0 ranks by validity and breaks ties by adoption; both axes appear side by side everywhere. Full fresh floors apply.
+
+**P0 becomes problem decomposition.** The §5 ensemble decomposes the *problem*: requirements and sub-problems `R1..Rn` (these are the run's components — list them in `mode.json` `requirements` and `graph.meta.components`), the operator's hard constraints from the brief (compute, data, licensing), and solution-space vocabulary — what would solutions to this be *called*, in every community that has the problem under any name. Problem-first search (§6 strategy 4) is this mode's primary axis rather than a supplement. The P0 checkpoint applies: a requirement missed here is a solution class never searched for.
+
+**The solution registry — `state/solutions.json`.** Every candidate solution the run surfaces gets an entry, including the failed and abandoned ones (knowing what did not work protects the operator from reinventing it):
+
+```json
+{"solutions": {
+   "SOL-01": {
+     "name": "...", "node": "<card id of the defining artifact>",
+     "covers": {"R1": "full|partial|none", "R2": "..."},
+     "constraint_violations": ["<operator constraint it breaks, if any>"],
+     "validity": {"status": "proven|promising|contested|failed|unvalidated",
+       "confirmations": [{"node": "...", "anchor": "<=15 words"}],
+       "reuses": [{"node": "...", "what": "<used as a component for what>"}],
+       "refutations": [{"node": "...", "anchor": "..."}]},
+     "adoption": {"adopter_groups": 4,
+       "org_backing": {"org": "...", "active": true, "evidence_node": "..."},
+       "code": {"repo_node": "...", "stars": 1200, "last_commit": "..."}},
+     "note": "<the one line a reader acts on>"}},
+ "unsolved_requirements": ["<R ids no solution covers — a finding, not a gap>"]}
+```
+
+**Validity statuses and their minimums** (gate-checked, `solution_coverage`):
+
+| Status | Meaning | Minimum evidence |
+|---|---|---|
+| `proven` | Independently confirmed or reused by others | ≥2 confirmation/reuse cards from groups disjoint from the authors and from each other |
+| `promising` | Demonstrated, possibly only by its authors | ≥1 confirming card |
+| `contested` | Works in some hands, fails in others | ≥1 confirming and ≥1 refuting card |
+| `failed` | The weight of evidence is against it | ≥2 refuting cards, or 1 at reliability ≥ 0.75 |
+| `unvalidated` | Claimed; nobody independent has checked | proof of search: ≥5 `role: "solution_check"` queries naming the solution |
+
+**Reuse outranks citation.** A citation is free; building a later system *on top of* the technique is a bet with the citing group's own time. Weight `reuses` accordingly when ranking within a status, and never let raw citation counts promote a solution's validity status (banned behavior 48 applies here unchanged — popularity is an adoption signal, not evidence).
+
+**Adoption is measured by behavior, not brand.** `adopter_groups` is cross-checked against the evidence: the gate counts distinct author groups (pairwise disjoint, disjoint from the solution's own authors) among the confirmation and reuse cards, and an agent-recorded number above the computed one fails. `org_backing.active` requires a retrieved `evidence_node` — a recent release, a maintained repo, a follow-up publication — not the org's fame. There is no prestige list anywhere in this mode: an org backs a solution by *doing things*, and a solution from a famous lab that stopped maintaining it two years ago is an abandonment risk the report must say out loud. Constraint violations never remove a solution from the map — they are flagged in `constraint_violations` and cost it rank in §0, because the operator's constraints may change and the map should outlive them.
+
+**Every requirement is covered or declared unsolved — nothing in between.** Each `R` must either have at least one solution with `covers: full|partial`, or appear in `unsolved_requirements` backed by proof of search (≥5 `role: "solution_check"` queries naming the requirement). An unsolved requirement is one of the most valuable findings this mode produces — it is where the operator's own contribution could live, and the prospector converts each one into a typed opportunity with `why_now` and a searched falsifier.
+
+**The red team's mandate inverts to failure hunting.** Same slots, same `redteam_null` mechanics; the objective: *break the recommendation.* Find "we tried X and it failed" reports, negative results, the limitation later work exposed, the deployment that quietly rolled it back, the solution family the map missed entirely. `threat_level` reads as "recommendation-changing evidence"; `which_component` is the requirement or solution ID. A ranking that survives two verified-null failure-hunting rounds is a ranking you can sign.
+
+**Gates.** All §12 gates with requirements as components, plus `solution_coverage`, fail-closed: registry present, every solution's defining node and evidence nodes on disk with status minimums met, `adopter_groups` not overstated, `org_backing.active` evidenced, every requirement covered or unsolved-with-proof, and no requirement both covered and declared unsolved. The prospector runs unchanged from round 8, seeded by the unsolved requirements and the `contested` disputes.
+
+**The report.** §0 is the **recommendation** (≤600 words, no subsections): a ranked table — solution, what it covers, validity, adoption, the one reason to pick or avoid it — then plain prose: "start with X; under constraint C, use Y instead"; if any requirement is unsolved, say so in §0 — it is a headline, not a footnote. §1 the problem as decomposed, constraints marked; §2 per-solution adjudication — validity evidence, adoption evidence, both axes explicit; §3 the failure museum — what has been tried and abandoned, with the stated reasons, so the operator never reinvents a documented dead end; §4 who is actively working the problem now; §5 the solution-family map, one subsection per family; §6 how the solution space evolved — which families rose, which stalled, and why; §7 unsolved requirements and openings, each with `why_now`; §8–§10 as in §15.3. The sealed file holds solutions the operator has already heard of — a P4 miss means the solution net has a hole precisely where the operator's own information was better than the run's.

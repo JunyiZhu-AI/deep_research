@@ -397,6 +397,13 @@ in it is load-bearing in a way an ordinary README's is not.
   disjoint-author test for `replicated` sees author strings only: the same
   group under different spellings, or serial collaborators publishing
   separately, both evade it.
+- **The §23.6 solution gate cross-checks structure, not truth.** A
+  confirmation card's existence on disk is verified; that it actually
+  confirms the solution is not — the same fidelity dependence as everywhere
+  else. `covers` is entirely agent-asserted: a solution marked `full` for a
+  requirement it barely touches passes every check, and only the §12.2 audit
+  or the operator's own reading catches it. The independent-groups counter
+  inherits the author-string weaknesses noted for §23.5 `replicated`.
 - **recall_check.py grades the seal mechanically, but its matcher can flatter
   in both directions.** Title-token containment at 0.6 can call an item found
   when the corpus merely holds a similarly-titled paper (overstating recall,

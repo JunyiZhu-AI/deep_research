@@ -81,6 +81,12 @@ PROPERTY_CHECK_QUERIES_MIN = 5
 PROPERTY_STATUSES = {"replicated", "demonstrated", "contested", "refuted",
                      "folklore"}
 
+# §23.6 problem mode.
+SOLUTION_CHECK_QUERIES_MIN = 5
+SOLUTION_STATUSES = {"proven", "promising", "contested", "failed",
+                     "unvalidated"}
+PROVEN_INDEPENDENT_GROUPS_MIN = 2
+
 HIGH_CONSEQUENCE_EDGES = {
     "subsumes", "equivalent", "special_case_of", "reinvents", "contradicts",
 }
@@ -544,7 +550,7 @@ def load_mode(root):
     """§23.0 — state/mode.json is the single source of truth; absent = fresh."""
     doc = read_json(os.path.join(root, "state", "mode.json"), {})
     if doc.get("mode") not in ("fresh", "incremental", "anchored",
-                               "retrospective", "concept"):
+                               "retrospective", "concept", "problem"):
         return {"mode": "fresh"}
     return doc
 
@@ -900,6 +906,131 @@ def property_coverage(root, cards_by_id, mode_doc, author_counts):
     return not problems, detail
 
 
+def solution_coverage(root, cards_by_id, mode_doc, author_counts):
+    """§23.6 — every requirement covered or declared unsolved with proof of
+    search; every solution's validity backed by evidence on disk; adoption
+    numbers cross-checked, never taken on the agent's word.
+
+    Validity and adoption are separate axes by design (banned behavior 49);
+    this gate checks each on its own terms and never combines them."""
+    problems = []
+    reqs = mode_doc.get("requirements") or []
+    doc = read_json(os.path.join(root, "state", "solutions.json"), {})
+    sols = doc.get("solutions") or {}
+    unsolved = doc.get("unsolved_requirements") or []
+    if not reqs:
+        problems.append("mode.json requirements is empty; fill it after P0")
+    if not sols:
+        problems.append("state/solutions.json has no solutions recorded")
+
+    per_id_checks = defaultdict(set)
+    for q in read_jsonl(os.path.join(root, "state", "seen_queries.jsonl")):
+        if q.get("role") == "solution_check" and q.get("claim"):
+            key = (q.get("query") or "").strip().lower()
+            if key:
+                per_id_checks[q["claim"]].add(key)
+
+    def authors_of(node):
+        return {str(a).strip().lower()
+                for a in ((cards_by_id.get(node) or {}).get("bib") or {})
+                .get("authors", []) or []}
+
+    def independent_groups(own, evidence):
+        """Count pairwise-disjoint author groups, disjoint from `own`."""
+        kept = []
+        for e in evidence:
+            g = authors_of(e.get("node"))
+            if not g or g & own:
+                continue
+            if all(not (g & k) for k in kept):
+                kept.append(g)
+        return len(kept)
+
+    covered = set()
+    detail_sols = {}
+    for sid, s in sols.items():
+        node = s.get("node")
+        own = authors_of(node)
+        if node not in cards_by_id:
+            problems.append(f"{sid}: defining node {node!r} not on disk")
+        for r, level in (s.get("covers") or {}).items():
+            if level in ("full", "partial"):
+                covered.add(r)
+        v = s.get("validity") or {}
+        status = v.get("status")
+        conf = [e for e in (v.get("confirmations") or [])
+                if e.get("node") in cards_by_id]
+        reuse = [e for e in (v.get("reuses") or [])
+                 if e.get("node") in cards_by_id]
+        refs = [e for e in (v.get("refutations") or [])
+                if e.get("node") in cards_by_id]
+        support = conf + reuse
+        indep = independent_groups(own, support)
+        if not status:
+            problems.append(f"{sid}: no validity.status recorded")
+        elif status not in SOLUTION_STATUSES:
+            problems.append(f"{sid}: status {status!r} not in the §23.6 "
+                            "taxonomy")
+        elif status == "proven":
+            if indep < PROVEN_INDEPENDENT_GROUPS_MIN:
+                problems.append(f"{sid}: proven needs "
+                                f">={PROVEN_INDEPENDENT_GROUPS_MIN} "
+                                f"independent groups (computed {indep})")
+        elif status == "promising":
+            if not support:
+                problems.append(f"{sid}: promising without a confirming card "
+                                "on disk")
+        elif status == "contested":
+            if not support or not refs:
+                problems.append(f"{sid}: contested needs both confirming and "
+                                "refuting cards on disk")
+        elif status == "failed":
+            strong = [e for e in refs
+                      if reliability(cards_by_id[e["node"]], author_counts)
+                      >= OVERTURN_RELIABILITY_MIN]
+            if len(refs) < 2 and not strong:
+                problems.append(f"{sid}: failed needs >=2 refuting cards or "
+                                "1 at reliability >= "
+                                f"{OVERTURN_RELIABILITY_MIN}")
+        elif status == "unvalidated":
+            n = len(per_id_checks.get(sid, set()))
+            if n < SOLUTION_CHECK_QUERIES_MIN:
+                problems.append(f"{sid}: unvalidated with {n} distinct "
+                                "solution_check queries (need "
+                                f"{SOLUTION_CHECK_QUERIES_MIN})")
+        adoption = s.get("adoption") or {}
+        rec = adoption.get("adopter_groups")
+        if isinstance(rec, int) and rec > indep:
+            problems.append(f"{sid}: adopter_groups={rec} overstates the "
+                            f"{indep} independent groups computable from "
+                            "evidence on disk")
+        org = adoption.get("org_backing") or {}
+        if org.get("active") and org.get("evidence_node") not in cards_by_id:
+            problems.append(f"{sid}: org_backing.active without an evidence "
+                            "node on disk -- backing is behavior, not brand")
+        detail_sols[sid] = {"status": status, "independent_groups": indep,
+                            "refutations": len(refs)}
+
+    for r in reqs:
+        if r in covered and r in unsolved:
+            problems.append(f"{r}: both covered by a solution and declared "
+                            "unsolved -- pick one")
+        elif r not in covered and r not in unsolved:
+            problems.append(f"{r}: no solution covers it and it is not "
+                            "declared unsolved")
+        elif r in unsolved:
+            n = len(per_id_checks.get(r, set()))
+            if n < SOLUTION_CHECK_QUERIES_MIN:
+                problems.append(f"{r}: unsolved with {n} distinct "
+                                "solution_check queries (need "
+                                f"{SOLUTION_CHECK_QUERIES_MIN})")
+
+    detail = {"solutions": detail_sols, "unsolved": unsolved,
+              "requirements_covered": sorted(covered & set(reqs)),
+              "problems": problems[:12]}
+    return not problems, detail
+
+
 def anchor_coverage(root, cards_by_id, mode_doc):
     """§23.2 — the run cannot pass gates while the anchor is undigested or
     its citation neighborhood unswept."""
@@ -1142,6 +1273,17 @@ def main():
             "value": pc_detail,
             "threshold": "every facet: graded status per §23.5 minimums",
             "pass": pc_ok}
+    elif mode == "problem":
+        cards_by_id = {c.get("id"): c for c in cards if c.get("id")}
+        author_counts = author_presence_counts(cards)
+        sc_ok, sc_detail = solution_coverage(root, cards_by_id, mode_doc,
+                                             author_counts)
+        gates["solution_coverage"] = {
+            "value": sc_detail,
+            "threshold": "every requirement covered or unsolved-with-proof; "
+                         "every status per §23.6 minimums; adoption "
+                         "cross-checked",
+            "pass": sc_ok}
     all_pass = all(gate["pass"] for gate in gates.values())
 
     # --- guidance: the failing gate drives next round's assignment mix (§12)
@@ -1192,7 +1334,8 @@ def main():
                          "targets": gates["claim_coverage"]["value"]["problems"][:4]})
     for cg, action in (("resolution_coverage", "confirm_concept_resolution"),
                        ("neighborhood_coverage", "digest_sibling_concepts"),
-                       ("property_coverage", "grade_property_evidence")):
+                       ("property_coverage", "grade_property_evidence"),
+                       ("solution_coverage", "adjudicate_solutions")):
         if cg in gates and not gates[cg]["pass"]:
             guidance.append({"gate": cg, "action": action,
                              "targets": gates[cg]["value"]["problems"][:4]})

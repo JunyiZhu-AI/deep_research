@@ -45,3 +45,8 @@ a thread, a paper title) — the context helps disambiguation — and any scope
 constraint. Do NOT name papers you have heard associated with it — those go
 in the sealed file, and whether the run finds them on its own is exactly the
 coverage measure.
+
+Problem (`--problem`): state the problem in full — what fails, when, and how
+you would know it was solved — plus your hard constraints (compute, data,
+licensing), which cost solutions rank but never remove them from the map. Do
+NOT name solutions you have heard of — those go in the sealed file.

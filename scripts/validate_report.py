@@ -359,6 +359,30 @@ def check_completeness(md, sections, root, d):
                                 f"the term has {len(senses)} confirmed senses "
                                 "and the report must lead with the split "
                                 "(§23.5)", d)
+    elif mode == "problem":
+        # §23.6 — §0 is the ranked recommendation; every solution reported;
+        # unsolved requirements are a headline, not a footnote.
+        body = sections.get(0, ("", ""))[1]
+        if not re.search(r"^\s*\|.*SOL-", body, re.M):
+            d.add("recommendation_missing", "§0",
+                  "problem §0 must contain the ranked recommendation table "
+                  "(solution | covers | validity | adoption | reason) — §23.6")
+        sol_path = os.path.join(root, "state", "solutions.json")
+        try:
+            with open(sol_path, encoding="utf-8") as fh:
+                sol_doc = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            sol_doc = {}
+        for sid in (sol_doc.get("solutions") or {}):
+            if sid not in md:
+                d.add("solution_not_reported", sid,
+                      "in the registry but absent from the report — the "
+                      "failed and abandoned belong on the map too (§23.6)")
+        if (sol_doc.get("unsolved_requirements") or []) and \
+                "unsolved" not in body.lower():
+            d.add("unsolved_not_in_verdict", "§0",
+                  "unsolved requirements exist and §0 does not say so — "
+                  "that is a headline finding (§23.6)")
 
 
 def main():

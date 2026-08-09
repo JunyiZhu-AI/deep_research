@@ -36,6 +36,9 @@ graph_metrics.py, round.py, and validate_report.py read:
 
     # concept: a term you heard — resolve it, map it, grade its claims
     python3 scripts/init_run.py --slug specdec --concept "speculative decoding"
+
+    # problem: map the solution space and rank what can be trusted
+    python3 scripts/init_run.py --slug ctx-drift --problem "agents forget constraints over long contexts"
 """
 
 import argparse
@@ -306,12 +309,16 @@ def main():
     ap.add_argument("--concept", default=None, metavar="TERM",
                     help="a term to resolve and consolidate; sets mode: "
                          "concept (MANUAL §23.5)")
+    ap.add_argument("--problem", default=None, metavar="STATEMENT",
+                    help="a problem to find trusted solutions for; sets mode: "
+                         "problem (MANUAL §23.6)")
     args = ap.parse_args()
 
     if sum(bool(x) for x in (args.base_run, args.anchor, args.subject,
-                             args.concept)) > 1:
-        sys.exit("[init] --base-run, --anchor, --subject, and --concept are "
-                 "mutually exclusive; pick one mode (MANUAL §23.3).")
+                             args.concept, args.problem)) > 1:
+        sys.exit("[init] --base-run, --anchor, --subject, --concept, and "
+                 "--problem are mutually exclusive; pick one mode "
+                 "(MANUAL §23.3).")
     if args.seed_only and not args.base_run:
         sys.exit("[init] --seed-only requires --base-run.")
     if args.base_run and not os.path.isdir(args.base_run):
@@ -382,6 +389,16 @@ def main():
             "note": "Agent fills facets after P0 (claimed properties, F1..) "
                     "and writes state/concept_resolution.json (MANUAL §23.5). "
                     "mode is operator-owned (§23.0).",
+        }
+    elif args.problem:
+        mode_doc = {
+            "mode": "problem",
+            "declared": now,
+            "problem": {"statement": args.problem},
+            "requirements": [],
+            "note": "Agent fills requirements after P0 (R1..) and maintains "
+                    "state/solutions.json (MANUAL §23.6). mode is "
+                    "operator-owned (§23.0).",
         }
     else:
         mode_doc = {"mode": "fresh", "declared": now}
@@ -513,12 +530,15 @@ def main():
                          "the paper itself is the brief",
         "concept": f"where you heard the term ({args.concept!r}) and any "
                    "scope constraints — the term itself is the brief",
+        "problem": "the PROBLEM in full, plus your hard constraints "
+                   "(compute, data, licensing) — name no solutions",
     }.get(mode, "the idea")
     sealed_what = {
         "incremental": "prior art you know about the FEATURE",
         "anchored": "prior art you know about the FOLLOW-UP",
         "retrospective": "follow-up works you already know about",
         "concept": "papers you have HEARD associated with the term",
+        "problem": "solutions you have already heard of",
     }.get(mode, "prior art you already know")
     print(f"""
 Mode: {mode}  (state/mode.json — MANUAL §23)
@@ -571,6 +591,18 @@ Concept specifics (MANUAL §23.5):
     graded status in state/property_evidence.json (property_coverage).
     'folklore' needs logged property_check searches; 'replicated' needs
     disjoint author groups.""")
+    elif mode == "problem":
+        print("""
+Problem specifics (MANUAL §23.6):
+  - P0 decomposes the PROBLEM into requirements (R1..); list their IDs in
+    state/mode.json requirements. Requirements are this mode's components.
+  - Every solution found -> state/solutions.json with covers, validity
+    (proven/promising/contested/failed/unvalidated) and adoption recorded
+    on separate axes, never merged.
+  - The solution_coverage gate fails until every requirement is covered by
+    a solution or declared unsolved with logged solution_check searches;
+    'proven' needs >=2 disjoint independent groups; adopter_groups and
+    org_backing.active are cross-checked against evidence on disk.""")
     print()
     return 1 if missing_crit else 0
 

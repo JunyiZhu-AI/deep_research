@@ -181,6 +181,16 @@ python3 scripts/init_run.py --slug attention-retro --subject https://arxiv.org/a
 # repeats and nobody has shown. The verdict page is an orientation briefing
 # with the 3 papers to read first.
 python3 scripts/init_run.py --slug specdec --concept "speculative decoding"
+
+# problem: you have a problem and no solution. The run decomposes the problem
+# into requirements, maps every candidate solution — including the failed and
+# abandoned ones — and ranks trust on two axes that are never merged:
+# validity (independent confirmation, reuse by other groups) and adoption
+# (breadth of use, org backing measured by behavior, living code). The
+# verdict is a ranked recommendation: start with X; under constraint C, use
+# Y. Requirements no solution covers are headline findings — and candidate
+# openings for your own work.
+python3 scripts/init_run.py --slug ctx-drift --problem "agents forget constraints over long contexts"
 ```
 
 ---
