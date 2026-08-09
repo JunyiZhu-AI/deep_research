@@ -745,13 +745,16 @@ counts as failed.** Write them as you go, not at the end of the round.
 `state/seen_queries.jsonl` — one line per query issued, by any worker:
 
 ```json
-{"round": 7, "strategy": "S3", "role": "scout|redteam|prospector",
+{"round": 7, "strategy": "S3",
+ "role": "scout|redteam|prospector|refresh|anchor_forward|descent|claim_check|property_check|solution_check",
  "query": "<the exact query string>", "new_relevant": 2,
+ "claim": "<target id — only for the *_check roles>",
  "inapplicable": false}
 ```
 
 - `round` and `strategy` are required, or the query is invisible to every gate.
-- `role` is what separates red-team searching from ordinary scouting. Without it the red team cannot prove it searched, and its rounds are **void**.
+- `role` is what separates red-team searching from ordinary scouting. Without it the red team cannot prove it searched, and its rounds are **void**. The mode-specific roles (`refresh`, `anchor_forward`, `descent`, and the three `*_check` roles) feed the §23 mode gates.
+- `claim` tags a proof-of-search query with its target — a claim, facet, solution, or requirement ID (`CL3`, `F1`, `SOL-02`, `R4`), or a list of them for a query covering several. A query counts for a target when **tagged with it or when the query text names it** — tag when you search by alias or by problem description, which is exactly what good searching looks like.
 - `query` must be the literal string — distinctness is computed from it, so near-duplicates padded to reach a count will be caught.
 - `new_relevant` is how many previously-unknown relevant items that single query surfaced.
 - `inapplicable: true` is the escape hatch for a strategy that genuinely cannot apply to this idea (e.g. patent search for a pure theory result). Use it honestly and rarely; it is logged and it appears in the report's methodology section.
@@ -1357,7 +1360,7 @@ Two failures deserve naming because they look like opposites and are the same mi
 
 ---
 
-## 23. RUN MODES — FRESH, INCREMENTAL, ANCHORED
+## 23. RUN MODES
 
 Everything before this section describes a **fresh** run: an idea arrives with no prior state, and the run builds the corpus from nothing. Five other modes exist. Incremental and anchored are *delta-over-base* runs — the question changes from "is this idea novel?" to "is this **delta** novel relative to this **base**, and what is its impact?" In incremental mode the base is a completed prior run; in anchored mode it is an external artifact. Retrospective mode (§23.4) inverts the direction entirely: there is no operator idea at all — a past paper is the subject, and the run maps everything that happened to it since. Concept mode (§23.5) starts even further back: the operator supplies only a *name* they heard, and the run must first establish what the name denotes before it can survey anything. Problem mode (§23.6) is fresh mode's mirror: the operator has a *problem* and no solution, and the run maps the solution space and ranks what can be trusted.
 
@@ -1492,7 +1495,7 @@ Affiliation and venue prestige may additionally order your *reading queue* — r
   "note": "<one sentence a reader can act on>"}}
 ```
 
-Two hard rules. **`ignored` requires proof of search, not absence of evidence**: ≥5 distinct queries logged with `role: "claim_check"` and a `claim` field naming the claim ID. Undisputed-because-solid and undisputed-because-unread are different findings, and only searching distinguishes them. **`overturned` is the strongest statement this mode can make** and carries the reliability threshold above — one weak paper can dispute, it cannot overturn.
+Two hard rules. **`ignored` requires proof of search, not absence of evidence**: ≥5 distinct queries logged with `role: "claim_check"`, each tagged with the claim ID via the `claim` field or naming it in the query text (§12.0). Undisputed-because-solid and undisputed-because-unread are different findings, and only searching distinguishes them. **`overturned` is the strongest statement this mode can make** and carries the reliability threshold above — one weak paper can dispute, it cannot overturn.
 
 A claim fate is one judgment over hundreds of cards — the same shape as P5 adjudication, with the same failure mode. **Load-bearing claims therefore get the §13.1 treatment**: three independent fate passes, disagreements reported with the artifact they disagree about, never averaged. Non-load-bearing claims may be single-passed.
 
@@ -1535,7 +1538,7 @@ Everything in P0 starts as memory-generated hypothesis (§1.4 permits exactly th
 | `demonstrated` | Shown once, not independently reproduced | ≥1 confirming card |
 | `contested` | Confirming and contradicting evidence both live | ≥1 contradicting card |
 | `refuted` | The weight of evidence is against it | ≥2 contradicting cards, or 1 at reliability ≥ 0.75 |
-| `folklore` | Circulates with the name; no retrieved artifact demonstrates it | proof of search: ≥5 `role: "property_check"` queries naming the facet |
+| `folklore` | Circulates with the name; no retrieved artifact demonstrates it | proof of search: ≥5 `role: "property_check"` queries tagged with or naming the facet (§12.0) |
 
 `folklore` is the status this mode was built to detect — a property everyone repeats and nobody has shown. It carries the same proof-of-search discipline as retrospective's `ignored`: circulating-without-evidence must be *searched*, not assumed. And **popularity is never evidence**: citation counts and repetition weight reading order (§23.4 reliability), not a property's status — a claim repeated in forty intros with one original experiment is `demonstrated`, not `replicated`.
 
@@ -1564,6 +1567,7 @@ The operator supplies a **problem** and no solution. The run's job: map the solu
        "reuses": [{"node": "...", "what": "<used as a component for what>"}],
        "refutations": [{"node": "...", "anchor": "..."}]},
      "adoption": {"adopter_groups": 4,
+       "adopters": [{"node": "...", "what": "<retrieved evidence of real use>"}],
        "org_backing": {"org": "...", "active": true, "evidence_node": "..."},
        "code": {"repo_node": "...", "stars": 1200, "last_commit": "..."}},
      "note": "<the one line a reader acts on>"}},
@@ -1578,16 +1582,16 @@ The operator supplies a **problem** and no solution. The run's job: map the solu
 | `promising` | Demonstrated, possibly only by its authors | ≥1 confirming card |
 | `contested` | Works in some hands, fails in others | ≥1 confirming and ≥1 refuting card |
 | `failed` | The weight of evidence is against it | ≥2 refuting cards, or 1 at reliability ≥ 0.75 |
-| `unvalidated` | Claimed; nobody independent has checked | proof of search: ≥5 `role: "solution_check"` queries naming the solution |
+| `unvalidated` | Claimed; nobody independent has checked | proof of search: ≥5 `role: "solution_check"` queries tagged with or naming the solution (§12.0) |
 
 **Reuse outranks citation.** A citation is free; building a later system *on top of* the technique is a bet with the citing group's own time. Weight `reuses` accordingly when ranking within a status, and never let raw citation counts promote a solution's validity status (banned behavior 48 applies here unchanged — popularity is an adoption signal, not evidence).
 
-**Adoption is measured by behavior, not brand.** `adopter_groups` is cross-checked against the evidence: the gate counts distinct author groups (pairwise disjoint, disjoint from the solution's own authors) among the confirmation and reuse cards, and an agent-recorded number above the computed one fails. `org_backing.active` requires a retrieved `evidence_node` — a recent release, a maintained repo, a follow-up publication — not the org's fame. There is no prestige list anywhere in this mode: an org backs a solution by *doing things*, and a solution from a famous lab that stopped maintaining it two years ago is an abandonment risk the report must say out loud. Constraint violations never remove a solution from the map — they are flagged in `constraint_violations` and cost it rank in §0, because the operator's constraints may change and the map should outlive them.
+**Adoption is measured by behavior, not brand.** `adopter_groups` is cross-checked against the evidence: the gate counts distinct author groups (pairwise disjoint, disjoint from the solution's own authors) among the confirmation, reuse, **and `adopters`** cards, and an agent-recorded integer above the computed one fails. The `adopters` list is how adoption is recorded *without* touching validity — a work that merely uses the solution goes there, not into `confirmations` — so "popular but unvalidated" is representable exactly as observed. A defining artifact with no recorded authors fails the gate outright: independence cannot be established from an unknown author set, and unknown must never be read as independent. `org_backing.active` requires a retrieved `evidence_node` — a recent release, a maintained repo, a follow-up publication — not the org's fame. There is no prestige list anywhere in this mode: an org backs a solution by *doing things*, and a solution from a famous lab that stopped maintaining it two years ago is an abandonment risk the report must say out loud. Constraint violations never remove a solution from the map — they are flagged in `constraint_violations` and cost it rank in §0, because the operator's constraints may change and the map should outlive them.
 
 **Every requirement is covered or declared unsolved — nothing in between.** Each `R` must either have at least one solution with `covers: full|partial`, or appear in `unsolved_requirements` backed by proof of search (≥5 `role: "solution_check"` queries naming the requirement). An unsolved requirement is one of the most valuable findings this mode produces — it is where the operator's own contribution could live, and the prospector converts each one into a typed opportunity with `why_now` and a searched falsifier.
 
 **The red team's mandate inverts to failure hunting.** Same slots, same `redteam_null` mechanics; the objective: *break the recommendation.* Find "we tried X and it failed" reports, negative results, the limitation later work exposed, the deployment that quietly rolled it back, the solution family the map missed entirely. `threat_level` reads as "recommendation-changing evidence"; `which_component` is the requirement or solution ID. A ranking that survives two verified-null failure-hunting rounds is a ranking you can sign.
 
-**Gates.** All §12 gates with requirements as components, plus `solution_coverage`, fail-closed: registry present, every solution's defining node and evidence nodes on disk with status minimums met, `adopter_groups` not overstated, `org_backing.active` evidenced, every requirement covered or unsolved-with-proof, and no requirement both covered and declared unsolved. The prospector runs unchanged from round 8, seeded by the unsolved requirements and the `contested` disputes.
+**Gates.** All §12 gates with requirements as components, plus `solution_coverage`, fail-closed: registry present, `mode.json` `requirements` identical to `graph.meta.components` (they are one list; drift lets a requirement escape the corpus floors), every solution's defining node and evidence nodes on disk with status minimums met, `adopter_groups` not overstated, `org_backing.active` evidenced, every requirement covered or unsolved-with-proof, no requirement both covered and declared unsolved, and no `covers` key or `unsolved` entry naming a requirement that does not exist. The prospector runs unchanged from round 8, seeded by the unsolved requirements and the `contested` disputes.
 
 **The report.** §0 is the **recommendation** (≤600 words, no subsections): a ranked table — solution, what it covers, validity, adoption, the one reason to pick or avoid it — then plain prose: "start with X; under constraint C, use Y instead"; if any requirement is unsolved, say so in §0 — it is a headline, not a footnote. §1 the problem as decomposed, constraints marked; §2 per-solution adjudication — validity evidence, adoption evidence, both axes explicit; §3 the failure museum — what has been tried and abandoned, with the stated reasons, so the operator never reinvents a documented dead end; §4 who is actively working the problem now; §5 the solution-family map, one subsection per family; §6 how the solution space evolved — which families rose, which stalled, and why; §7 unsolved requirements and openings, each with `why_now`; §8–§10 as in §15.3. The sealed file holds solutions the operator has already heard of — a P4 miss means the solution net has a hole precisely where the operator's own information was better than the run's.

@@ -13,7 +13,8 @@ Read **[`MANUAL.md`](MANUAL.md)** in full before you do anything else. All of
 it. It is the authoritative instruction set; this README is only the map.
 
 You will be given an idea — or, depending on the run's mode, a feature to add,
-an anchor artifact to follow up, or a past paper to run a retrospective on.
+an anchor artifact to follow up, a past paper to run a retrospective on, a
+term to resolve, or a problem to find trusted solutions for.
 **Read `state/mode.json` first** and run the MANUAL §23.0 sanity check: the
 mode changes what P0 produces, which gates hold you, and what the report is.
 If the brief does not match the declared mode, stop and ask — operators

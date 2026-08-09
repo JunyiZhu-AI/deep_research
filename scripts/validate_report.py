@@ -123,8 +123,35 @@ def sentences(text):
     return [s.strip() for s in SENT_SPLIT.split(text) if len(s.split()) > 2]
 
 
-def check_readability(md, sections, d):
-    # --- §16.3 the verdict page
+def id_present(needle, hay):
+    """Word-boundary ID containment. Raw substring lets SOL-1 hide behind
+    SOL-10 and vaswani2017attention behind vaswani2017attention_b."""
+    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(needle)
+                     + r"(?![A-Za-z0-9_])", hay) is not None
+
+
+def load_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def load_mode(root):
+    """§23.0 — mode.json is the single source of truth; absent = fresh."""
+    doc = load_json(os.path.join(root, "state", "mode.json"), {}) or {}
+    mode = doc.get("mode", "fresh")
+    return mode, doc
+
+
+def check_readability(md, sections, d, mode="fresh"):
+    # --- §16.3 the verdict page. Form rules (length, structure, sentences)
+    # are universal. The recommendation-word and falsifier checks encode the
+    # NOVELTY verdict's shape and apply only to the modes that produce one —
+    # retrospective/concept/problem §0 formats (§23.4-§23.6) have their own
+    # mode checks in check_completeness.
+    novelty_verdict = mode in ("fresh", "incremental", "anchored")
     if 0 not in sections:
         d.add("no_verdict_section", "§0", "report has no '## 0.' verdict section")
     else:
@@ -138,11 +165,13 @@ def check_readability(md, sections, d):
             d.add("verdict_has_subsections", "§0",
                   "§0 must have no subsections (§16.3)")
         head = " ".join(prose_only(body).split()[:60]).lower()
-        if not re.search(r"\b(proceed|pivot|abandon|reframe|reframing)\b", head):
+        if novelty_verdict and not re.search(
+                r"\b(proceed|pivot|abandon|reframe|reframing)\b", head):
             d.add("verdict_no_recommendation", "§0",
                   "first 60 words state no recommendation "
                   "(proceed / reframe / pivot / abandon)")
-        if not re.search(r"\bwould change\b|\bchange this verdict\b", body, re.I):
+        if novelty_verdict and not re.search(
+                r"\bwould change\b|\bchange this verdict\b", body, re.I):
             d.add("verdict_no_falsifier", "§0",
                   "§0 must say what would change the verdict")
         if not re.search(r"\bcorpus\b|\bcoverage\b|\bthin\b|\bwith respect to\b",
@@ -197,13 +226,13 @@ def _require_subsection(md, heading_re, where, kind, why, d):
               f"subsection present but under 30 words -- {why}")
 
 
-def check_completeness(md, sections, root, d):
+def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
+    mode_doc = mode_doc or {}
     graph = None
     for cand in (os.path.join(root, "out", "graph.json"),
                  os.path.join(root, "graph", "graph.json")):
         if os.path.exists(cand):
-            with open(cand, encoding="utf-8") as fh:
-                graph = json.load(fh)
+            graph = load_json(cand)
             break
     if graph is None:
         d.add("no_graph", root, "cannot verify completeness without a graph")
@@ -212,7 +241,7 @@ def check_completeness(md, sections, root, d):
     # every core node must appear in the bibliography (§15.4)
     core = [n["id"] for n in graph.get("nodes", []) if n.get("status") == "core"]
     bib = sections.get(9, ("", ""))[1] + sections.get(10, ("", ""))[1]
-    missing = [nid for nid in core if nid not in bib]
+    missing = [nid for nid in core if not id_present(nid, bib)]
     if missing:
         d.add("bibliography_incomplete", f"{len(missing)} of {len(core)} core nodes",
               "missing: " + ", ".join(missing[:10]) +
@@ -235,7 +264,7 @@ def check_completeness(md, sections, root, d):
     # every component adjudicated (§13)
     nov = sections.get(2, ("", ""))[1]
     for comp in graph.get("meta", {}).get("components", []):
-        if comp not in nov:
+        if not id_present(comp, nov):
             d.add("component_not_adjudicated", comp, "absent from §2")
 
     # every opportunity listed (§15.4)
@@ -275,11 +304,7 @@ def check_completeness(md, sections, root, d):
               "scripts/recall_check.py (sealed file), --paste <file> "
               "(operator-held list), or --none (no list exists) (§0.1)")
     else:
-        try:
-            with open(rc_path, encoding="utf-8") as fh:
-                rc = json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            rc = {}
+        rc = load_json(rc_path, {}) or {}
         coverage = sections.get(8, ("", ""))[1]
         verdict = sections.get(0, ("", ""))[1]
         if rc.get("n_missed", 0) > 0:
@@ -303,15 +328,6 @@ def check_completeness(md, sections, root, d):
                   "does not surface it (§0.1)")
 
     # §23 mode-conditional subsections
-    mode, mode_doc = "fresh", {}
-    mode_path = os.path.join(root, "state", "mode.json")
-    if os.path.exists(mode_path):
-        try:
-            with open(mode_path, encoding="utf-8") as fh:
-                mode_doc = json.load(fh)
-            mode = mode_doc.get("mode", "fresh")
-        except (json.JSONDecodeError, OSError):
-            pass
     if mode == "incremental":
         _require_subsection(md, r"^###\s+Impact evidence\b", "§2",
                             "impact_evidence_missing",
@@ -332,7 +348,7 @@ def check_completeness(md, sections, root, d):
                   "retrospective §0 must contain the claim scoreboard table "
                   "(claim | fate | deciding papers | dates) — §23.4")
         for cl in mode_doc.get("claims") or []:
-            if cl not in body:
+            if not id_present(cl, body):
                 d.add("claim_not_in_scoreboard", cl,
                       "claim absent from the §0 scoreboard — every claim's "
                       "fate is the verdict (§23.4)")
@@ -347,12 +363,9 @@ def check_completeness(md, sections, root, d):
                             "reading_path_missing",
                             "concept runs must give the foundations → "
                             "canonical → frontier reading path (§23.5)", d)
-        res_path = os.path.join(root, "state", "concept_resolution.json")
-        try:
-            with open(res_path, encoding="utf-8") as fh:
-                senses = json.load(fh).get("senses") or []
-        except (json.JSONDecodeError, OSError):
-            senses = []
+        res = load_json(os.path.join(root, "state",
+                                     "concept_resolution.json"), {}) or {}
+        senses = res.get("senses") or []
         if len(senses) > 1:
             _require_subsection(md, r"^###\s+Disambiguation\b", "§1",
                                 "disambiguation_missing",
@@ -361,28 +374,39 @@ def check_completeness(md, sections, root, d):
                                 "(§23.5)", d)
     elif mode == "problem":
         # §23.6 — §0 is the ranked recommendation; every solution reported;
-        # unsolved requirements are a headline, not a footnote.
+        # unsolved requirements are a headline, not a footnote; the failure
+        # museum has a mechanical backstop like every other mode subsection.
         body = sections.get(0, ("", ""))[1]
-        if not re.search(r"^\s*\|.*SOL-", body, re.M):
-            d.add("recommendation_missing", "§0",
-                  "problem §0 must contain the ranked recommendation table "
-                  "(solution | covers | validity | adoption | reason) — §23.6")
-        sol_path = os.path.join(root, "state", "solutions.json")
-        try:
-            with open(sol_path, encoding="utf-8") as fh:
-                sol_doc = json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            sol_doc = {}
-        for sid in (sol_doc.get("solutions") or {}):
-            if sid not in md:
+        sol_doc = load_json(os.path.join(root, "state", "solutions.json"),
+                            {}) or {}
+        sol_ids = list(sol_doc.get("solutions") or {})
+        # The table check is derived from the registry's ACTUAL ids — no
+        # naming convention is imposed (the old literal 'SOL-' both
+        # false-blocked compliant reports and false-passed table-free ones).
+        if sol_ids:
+            row_pat = re.compile(
+                r"^\s*\|.*(?:" +
+                "|".join(re.escape(i) for i in sol_ids) + r")", re.M)
+            if not row_pat.search(body):
+                d.add("recommendation_missing", "§0",
+                      "problem §0 must contain the ranked recommendation "
+                      "table referencing the registry's solutions — §23.6")
+        for sid in sol_ids:
+            if not id_present(sid, md):
                 d.add("solution_not_reported", sid,
                       "in the registry but absent from the report — the "
                       "failed and abandoned belong on the map too (§23.6)")
-        if (sol_doc.get("unsolved_requirements") or []) and \
-                "unsolved" not in body.lower():
-            d.add("unsolved_not_in_verdict", "§0",
-                  "unsolved requirements exist and §0 does not say so — "
-                  "that is a headline finding (§23.6)")
+        for r in sol_doc.get("unsolved_requirements") or []:
+            if not id_present(r, body):
+                d.add("unsolved_not_in_verdict", r,
+                      "unsolved requirement absent from §0 — that is a "
+                      "headline finding (§23.6)")
+        sec3 = sections.get(3, ("", ""))[1]
+        if len(prose_only(sec3).split()) < 30:
+            d.add("failure_museum_missing", "§3",
+                  "problem runs must carry the failure museum — what was "
+                  "tried and abandoned, with the stated reasons; if nothing "
+                  "failed, §3 says that and what it implies (§23.6)")
 
 
 def main():
@@ -401,8 +425,9 @@ def main():
 
     d = Defects()
     sections = split_sections(md)
-    check_readability(md, sections, d)
-    check_completeness(md, sections, args.run_root, d)
+    mode, mode_doc = load_mode(args.run_root)
+    check_readability(md, sections, d, mode)
+    check_completeness(md, sections, args.run_root, d, mode, mode_doc)
 
     n = d.n_blocking()
     summary = {"report": path, "sections_found": sorted(sections),

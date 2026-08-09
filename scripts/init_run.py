@@ -314,6 +314,19 @@ def main():
                          "problem (MANUAL §23.6)")
     args = ap.parse_args()
 
+    # An explicitly passed but empty mode flag (classic: an unset shell
+    # variable) must never silently fall through to mode: fresh — the
+    # wrong-mode failure costs the whole run (§23.0).
+    for flag, attr in (("--base-run", "base_run"), ("--anchor", "anchor"),
+                       ("--subject", "subject"), ("--concept", "concept"),
+                       ("--problem", "problem")):
+        val = getattr(args, attr)
+        if val is not None:
+            if not val.strip():
+                sys.exit(f"[init] {flag} was given but is empty -- check "
+                         "your shell variable (MANUAL §23.3).")
+            setattr(args, attr, val.strip())
+
     if sum(bool(x) for x in (args.base_run, args.anchor, args.subject,
                              args.concept, args.problem)) > 1:
         sys.exit("[init] --base-run, --anchor, --subject, --concept, and "

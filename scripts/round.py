@@ -155,16 +155,16 @@ def main():
     args = ap.parse_args()
     root, rnd = args.run_root, args.round
 
+    # Mode is display + pacing only here; graph_metrics.VALID_MODES is the
+    # one authoritative list, so this file cannot drift out of sync with it.
     mode_path = os.path.join(root, "state", "mode.json")
     mode, floors = "fresh", {}
     if os.path.exists(mode_path):
         try:
             with open(mode_path, encoding="utf-8") as fh:
                 doc = json.load(fh)
-            if doc.get("mode") in ("fresh", "incremental", "anchored",
-                                   "retrospective", "concept", "problem"):
-                mode = doc["mode"]
-                floors = doc.get("floors") or {}
+            mode = doc.get("mode") or "fresh"
+            floors = doc.get("floors") or {}
         except json.JSONDecodeError:
             pass
     prospector_start = (floors.get("prospector_start_round", 4)
