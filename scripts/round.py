@@ -155,23 +155,39 @@ def main():
     args = ap.parse_args()
     root, rnd = args.run_root, args.round
 
-    # Mode is display + pacing only here; graph_metrics.VALID_MODES is the
-    # one authoritative list, so this file cannot drift out of sync with it.
+    # Mode list comes from mode_defs.py (fallback for a lone copied script).
+    # An invalid declared mode is WARNED about, never displayed as active:
+    # graph_metrics gates such a run as fresh, and showing the bad string in
+    # the banner would tell the operator the §23 gates are on when they are
+    # not.
+    try:
+        from mode_defs import VALID_MODES
+    except ImportError:
+        VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
+                       "concept", "problem")
     mode_path = os.path.join(root, "state", "mode.json")
-    mode, floors = "fresh", {}
+    mode, floors, declared = "fresh", {}, None
     if os.path.exists(mode_path):
         try:
             with open(mode_path, encoding="utf-8") as fh:
                 doc = json.load(fh)
-            mode = doc.get("mode") or "fresh"
-            floors = doc.get("floors") or {}
-        except json.JSONDecodeError:
+            if isinstance(doc, dict):
+                declared = doc.get("mode")
+                if declared in VALID_MODES:
+                    mode = declared
+                    floors = doc.get("floors") or {}
+        except (json.JSONDecodeError, OSError):
             pass
     prospector_start = (floors.get("prospector_start_round", 4)
                         if mode == "incremental" else 8)
 
     print(f"\n=== round {rnd:02d}"
           + (f"  [{mode} — MANUAL §23]" if mode != "fresh" else "") + " ===\n")
+    if declared is not None and declared != mode:
+        print(f"  !! declared mode {declared!r} is NOT a valid mode — the "
+              f"gates are running as FRESH, not as {declared!r}.")
+        print("  !! Fix state/mode.json before continuing (§23.0); the §23 "
+              "mode gates you may be counting on are OFF.\n")
 
     print("[1/3] metrics + gates")
     rc, out = run("graph_metrics.py", ["--run-root", root, "--round", str(rnd)],

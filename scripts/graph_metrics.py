@@ -88,10 +88,13 @@ SOLUTION_STATUSES = {"proven", "promising", "contested", "failed",
                      "unvalidated"}
 PROVEN_INDEPENDENT_GROUPS_MIN = 2
 
-# §23.0 — the one authoritative list. round.py deliberately does not keep a
-# copy; unknown modes fall back to fresh here and only here.
-VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
-               "concept", "problem")
+# §23.0 — single source of truth in mode_defs.py; literal fallback only for
+# a script copied out of the tree alone.
+try:
+    from mode_defs import VALID_MODES
+except ImportError:
+    VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
+                   "concept", "problem")
 
 HIGH_CONSEQUENCE_EDGES = {
     "subsumes", "equivalent", "special_case_of", "reinvents", "contradicts",
@@ -515,14 +518,25 @@ def card_fidelity(root, current_round, window=CARD_FIDELITY_ROUNDS):
 
 
 def opportunity_coverage(root, graph, current_round,
-                         start_round=PROSPECTOR_START_ROUND):
+                         start_round=PROSPECTOR_START_ROUND,
+                         cards_by_id=None):
     """§11.5 -- the generative half cannot stop on a null result.
 
     Before the prospector starts (round 8 fresh, round 4 incremental — §23.1)
     this gate is simply not yet satisfiable, which is correct: it should hold
-    the run open, not wave it through.
+    the run open, not wave it through. Evidence nodes cited by opportunity
+    records must exist in the corpus — a fabricated citation here flows
+    straight into report §7 (§1.4).
     """
     recs = read_jsonl(os.path.join(root, "opportunities", "opportunities.jsonl"))
+    fabricated = []
+    if cards_by_id is not None:
+        for o in recs:
+            for e in (o.get("evidence") or []):
+                for n in (e.get("nodes") or []) if isinstance(e, dict) else []:
+                    if n not in cards_by_id:
+                        fabricated.append({"opportunity": o.get("id"),
+                                           "node": n})
     complete = [o for o in recs
                 if (o.get("why_now") or "").strip()
                 and (o.get("falsifier") or "").strip()]
@@ -543,20 +557,32 @@ def opportunity_coverage(root, graph, current_round,
         "extends": len(extends),
         "clusters_unevaluated": len(unevaluated),
         "incomplete_records": [o.get("id") for o in recs if o not in complete][:10],
+        "fabricated_evidence_nodes": fabricated[:10],
     }
     ok = (current_round >= start_round
           and len(complete) >= OPP_MIN_RECORDS
           and len(types) >= OPP_MIN_TYPES
           and len(extends) >= OPP_MIN_EXTENDS
-          and not unevaluated)
+          and not unevaluated
+          and not fabricated)
     return ok, detail
 
 
 def load_mode(root):
-    """§23.0 — state/mode.json is the single source of truth; absent = fresh."""
+    """§23.0 — state/mode.json is the single source of truth; absent = fresh.
+
+    An invalid declared mode is normalized to fresh but NEVER silently: the
+    original string is preserved so the gate document and round banner can
+    say the declaration was rejected instead of masking it."""
     doc = read_json(os.path.join(root, "state", "mode.json"), {})
-    if doc.get("mode") not in VALID_MODES:
-        return {"mode": "fresh"}
+    if not isinstance(doc, dict):
+        return {"mode": "fresh", "invalid_declared_mode": repr(doc)}
+    declared = doc.get("mode")
+    if declared not in VALID_MODES:
+        out = {"mode": "fresh"}
+        if declared is not None:
+            out["invalid_declared_mode"] = declared
+        return out
     return doc
 
 
@@ -571,69 +597,119 @@ def card_authors(card):
 def max_disjoint_groups(groups):
     """Size of the largest set of pairwise-disjoint author groups.
 
-    Exact and order-independent for the list sizes evidence carries; replaces
-    greedy first-fit, whose verdicts depended on JSON array order. Identical
-    author sets are one group. Used by §23.5 `replicated` and §23.6 `proven`
-    so the two gates cannot disagree on the same evidence."""
-    uniq = list({frozenset(g) for g in groups if g})[:24]
-    best = 0
+    Deterministic and never order-dependent: groups are deduplicated and
+    sorted canonically, a size-ascending greedy pass sets the floor (optimal
+    whenever the groups are already pairwise disjoint, the common case at
+    any scale), and an exact branch-and-bound runs when the list is small
+    enough to afford it — initialized at the greedy floor, so the result
+    can only improve. Used by §23.5 `replicated` and §23.6 `proven` so the
+    two gates cannot disagree on the same evidence."""
+    uniq = sorted({frozenset(g) for g in groups if g},
+                  key=lambda s: (len(s), tuple(sorted(s))))
+    taken, best = frozenset(), 0
+    for g in uniq:
+        if not (g & taken):
+            taken |= g
+            best += 1
+    if len(uniq) > 24:
+        return best
 
-    def rec(i, taken, count):
+    def rec(i, chosen, count):
         nonlocal best
         best = max(best, count)
         if i >= len(uniq) or count + (len(uniq) - i) <= best:
             return
-        if not (uniq[i] & taken):
-            rec(i + 1, taken | uniq[i], count + 1)
-        rec(i + 1, taken, count)
+        if not (uniq[i] & chosen):
+            rec(i + 1, chosen | uniq[i], count + 1)
+        rec(i + 1, chosen, count)
 
     rec(0, frozenset(), 0)
     return best
 
 
 def role_target_checks(root, role):
-    """Proof-of-search accounting for the *_check roles (§23.4–§23.6).
+    """Proof-of-search accounting for the *_check roles (§12.0, §23.4–§23.6).
 
-    Returns (per_tag, texts, malformed): queries tagged per target via the
-    §12.0 `claim` field (string, or list of strings for multi-target
-    queries), every query text logged under the role, and legible complaints
-    for rows the accounting cannot read — a malformed row is a gate problem,
-    never a crash."""
-    per_tag, texts, malformed = defaultdict(set), [], []
+    Returns (per_tag, untagged, malformed): distinct query texts per
+    normalized tag, the texts carrying no readable tag at all, and legible
+    complaints for rows the accounting cannot read — a malformed row is a
+    gate problem, never a crash. Tags are normalized (strip/lower) exactly
+    like every other join key in this file."""
+    per_tag, untagged, malformed = defaultdict(set), set(), []
     for q in read_jsonl(os.path.join(root, "state", "seen_queries.jsonl")):
         if q.get("role") != role:
             continue
-        text = (q.get("query") or "").strip().lower()
+        text = (str(q.get("query") or "")).strip().lower()
         if not text:
             continue
-        texts.append(text)
         claim = q.get("claim")
         if claim is None:
+            untagged.add(text)
             continue
         tags = [claim] if isinstance(claim, str) else \
                list(claim) if isinstance(claim, (list, tuple)) else None
         if tags is None or not all(isinstance(t, str) for t in tags):
             malformed.append(f"{role} row has unreadable claim {claim!r} — "
                              "use a string or list of strings (§12.0)")
+            untagged.add(text)
             continue
-        for t in tags:
+        clean = [t.strip().lower() for t in tags if t.strip()]
+        if not clean:
+            untagged.add(text)
+        for t in clean:
             per_tag[t].add(text)
-    return per_tag, texts, malformed[:4]
+    if len(malformed) > 4:
+        malformed = malformed[:4] + [f"...and {len(malformed) - 4} more "
+                                     "malformed rows"]
+    return per_tag, untagged, malformed
 
 
-def count_checks(per_tag, texts, target, names=()):
+def count_checks(per_tag, untagged, target, names=()):
     """Distinct queries that count for a target: tagged with it, or naming
-    it (or one of its names) in the query text. Tagging alone suffices — an
-    intelligent agent searches by alias, and a literal-string demand would
-    punish exactly that."""
-    hits = set(per_tag.get(target, set()))
-    keys = [k.lower() for k in (target, *names) if k]
-    pat = [re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")
-           for k in keys]
-    for t in texts:
-        if any(p.search(t) for p in pat):
+    it in the query text. Tagging alone suffices — an intelligent agent
+    searches by alias, and a literal-string demand would punish exactly
+    that. Text matching runs ONLY over queries tagged for this target or
+    tagged for nothing: a query explicitly tagged for a different target is
+    that target's evidence, not this one's — incidental token overlap must
+    not certify a search that never happened."""
+    key = str(target).strip().lower()
+    own = set(per_tag.get(key, set()))
+    hits = set(own)
+    words = []
+    for n in (target, *names):
+        if isinstance(n, (list, tuple)):
+            words.extend(str(x) for x in n if x)
+        elif n:
+            words.append(str(n))
+    pats = [re.compile(r"(?<![a-z0-9_])" + re.escape(w.strip().lower())
+                       + r"(?![a-z0-9_])") for w in words if w.strip()]
+    for t in untagged | own:
+        if any(p.search(t) for p in pats):
             hits.add(t)
     return len(hits)
+
+
+def string_ids(seq, owner, problems):
+    """Filter an agent-written id list to usable strings, flagging the rest.
+    A non-string id is a data problem, never a crash."""
+    ok = []
+    for x in seq or []:
+        if isinstance(x, str) and x.strip():
+            ok.append(x)
+        else:
+            problems.append(f"{owner}: id {x!r} is not a non-empty string")
+    return ok
+
+
+def as_dict(value, owner, problems):
+    """State files must be JSON objects; anything else is a legible gate
+    problem instead of an AttributeError three lines later."""
+    if isinstance(value, dict):
+        return value
+    if value not in (None, {}):
+        problems.append(f"{owner}: expected a JSON object, got "
+                        f"{type(value).__name__}")
+    return {}
 
 
 def strongly_refuted(contradicting, cards_by_id, author_counts):
@@ -687,11 +763,14 @@ def refresh_sweep(root):
     logged refresh queries, and the gate fails. The self-reported totals are
     cross-checked against the query log so a bare 'completed: true' does not
     pass on its own."""
-    doc = read_json(os.path.join(root, "state", "refresh_sweep.json"), {})
+    problems0 = []
+    doc = as_dict(read_json(os.path.join(root, "state",
+                                         "refresh_sweep.json"), {}),
+                  "refresh_sweep.json", problems0)
     n_queries = distinct_role_queries(root, "refresh")
     total = doc.get("base_core_nodes_total", 0) or 0
     checked = doc.get("base_core_nodes_checked", 0) or 0
-    problems = []
+    problems = problems0
     if not doc:
         problems.append("state/refresh_sweep.json not written")
     if not doc.get("completed"):
@@ -817,21 +896,25 @@ def claim_coverage(root, cards_by_id, mode_doc, author_counts):
     scaled by source reliability. A fate the validator cannot trace to cards
     on disk is an assertion, and assertions do not pass gates."""
     problems = []
-    claims = mode_doc.get("claims") or []
-    fates = read_json(os.path.join(root, "state", "claim_fates.json"), {})
+    claims = string_ids(mode_doc.get("claims"), "mode.json claims", problems)
+    fates = as_dict(read_json(os.path.join(root, "state",
+                                           "claim_fates.json"), {}),
+                    "claim_fates.json", problems)
     if not claims:
         problems.append("mode.json claims is empty; fill it after P0")
 
-    per_tag, texts, malformed = role_target_checks(root, "claim_check")
+    per_tag, untagged, malformed = role_target_checks(root, "claim_check")
     problems.extend(malformed)
 
     detail_claims = {}
     for cl in claims:
-        f = fates.get(cl) or {}
+        f = as_dict(fates.get(cl), f"claim_fates.json[{cl}]", problems)
         fate = f.get("fate")
         ev = evidence_on_disk(f.get("evidence"), cards_by_id, cl,
                               "evidence", problems)
-        checks = count_checks(per_tag, texts, cl)
+        contradicting = [e for e in ev
+                         if e.get("relation") == "contradicts"]
+        checks = count_checks(per_tag, untagged, cl)
         if not fate:
             problems.append(f"{cl}: no fate recorded in claim_fates.json")
         elif fate not in CLAIM_FATES:
@@ -842,10 +925,12 @@ def claim_coverage(root, cards_by_id, mode_doc, author_counts):
                                 f"claim_check queries "
                                 f"(need {CLAIM_CHECK_QUERIES_MIN})")
         elif fate == "overturned":
-            if not strongly_refuted(ev, cards_by_id, author_counts):
-                problems.append(f"{cl}: overturned needs >=2 evidence cards, "
-                                f"or 1 with reliability >= "
-                                f"{OVERTURN_RELIABILITY_MIN} (has {len(ev)})")
+            if not strongly_refuted(contradicting, cards_by_id,
+                                    author_counts):
+                problems.append(f"{cl}: overturned needs >=2 CONTRADICTING "
+                                "cards, or 1 with reliability >= "
+                                f"{OVERTURN_RELIABILITY_MIN} "
+                                f"(has {len(contradicting)} contradicting)")
         elif fate == "abandoned":
             if not ev and not f.get("timeline"):
                 problems.append(f"{cl}: abandoned needs evidence or a dated "
@@ -867,10 +952,12 @@ def resolution_coverage(root, cards_by_id, mode_doc):
     Every sense confirmed by retrieved uses, every alias actually searched,
     the origin on disk with a date. An unresolved concept fails closed."""
     problems = []
-    res = read_json(os.path.join(root, "state", "concept_resolution.json"), {})
-    if not res:
+    res = as_dict(read_json(os.path.join(root, "state",
+                                         "concept_resolution.json"), {}),
+                  "concept_resolution.json", problems)
+    if not res and not problems:
         problems.append("state/concept_resolution.json not written (P0)")
-    queries = [(q.get("query") or "").lower()
+    queries = [str(q.get("query") or "").lower()
                for q in read_jsonl(os.path.join(root, "state",
                                                 "seen_queries.jsonl"))]
     senses = res.get("senses") or []
@@ -888,8 +975,10 @@ def resolution_coverage(root, cards_by_id, mode_doc):
         if len(confirmed) < SENSE_CONFIRM_MIN:
             problems.append(f"sense {sid}: {len(confirmed)} confirming cards "
                             f"on disk (need {SENSE_CONFIRM_MIN})")
-    for alias in res.get("aliases") or []:
-        n = sum(1 for q in queries if alias.lower() in q)
+    for alias in string_ids(res.get("aliases"), "aliases", problems):
+        pat = re.compile(r"(?<![a-z0-9_])" + re.escape(alias.strip().lower())
+                         + r"(?![a-z0-9_])")
+        n = sum(1 for q in queries if pat.search(q))
         if n < ALIAS_QUERIES_MIN:
             problems.append(f"alias {alias!r} in {n} logged queries "
                             f"(need {ALIAS_QUERIES_MIN})")
@@ -909,9 +998,11 @@ def resolution_coverage(root, cards_by_id, mode_doc):
 def neighborhood_coverage(root, cards_by_id, mode_doc):
     """§23.5 — a concept is only understood relative to its alternatives."""
     problems = []
-    res = read_json(os.path.join(root, "state", "concept_resolution.json"), {})
+    res = as_dict(read_json(os.path.join(root, "state",
+                                         "concept_resolution.json"), {}),
+                  "concept_resolution.json", problems)
     sibs = res.get("siblings") or []
-    queries = [(q.get("query") or "").lower()
+    queries = [str(q.get("query") or "").lower()
                for q in read_jsonl(os.path.join(root, "state",
                                                 "seen_queries.jsonl"))]
     if not sibs:
@@ -924,7 +1015,10 @@ def neighborhood_coverage(root, cards_by_id, mode_doc):
         problems.append(f"{len(sibs)} sibling(s) mapped "
                         f"(need {SIBLINGS_MIN}, or a justification)")
     for s in sibs:
-        name = s.get("name", "?")
+        name = s.get("name")
+        if not isinstance(name, str) or not name.strip():
+            problems.append(f"sibling entry has no usable name: {s!r}")
+            continue
         cards = []
         for c in s.get("cards") or []:
             if c in cards_by_id:
@@ -934,7 +1028,9 @@ def neighborhood_coverage(root, cards_by_id, mode_doc):
         if len(cards) < SIBLING_CARDS_MIN:
             problems.append(f"sibling {name!r}: {len(cards)} digested cards "
                             f"on disk (need {SIBLING_CARDS_MIN})")
-        n = sum(1 for q in queries if name.lower() in q)
+        pat = re.compile(r"(?<![a-z0-9_])" + re.escape(name.strip().lower())
+                         + r"(?![a-z0-9_])")
+        n = sum(1 for q in queries if pat.search(q))
         if n < ALIAS_QUERIES_MIN:
             problems.append(f"sibling {name!r} in {n} logged queries "
                             f"(need {ALIAS_QUERIES_MIN})")
@@ -949,24 +1045,26 @@ def property_coverage(root, cards_by_id, mode_doc, author_counts):
     `folklore` carries proof of search; `replicated` requires disjoint author
     groups (popularity is never evidence — banned behavior 48)."""
     problems = []
-    facets = mode_doc.get("facets") or []
-    ev_doc = read_json(os.path.join(root, "state", "property_evidence.json"),
-                       {})
+    facets = string_ids(mode_doc.get("facets"), "mode.json facets", problems)
+    ev_doc = as_dict(read_json(os.path.join(root, "state",
+                                            "property_evidence.json"), {}),
+                     "property_evidence.json", problems)
     if not facets:
         problems.append("mode.json facets is empty; fill it after P0")
 
-    per_tag, texts, malformed = role_target_checks(root, "property_check")
+    per_tag, untagged, malformed = role_target_checks(root, "property_check")
     problems.extend(malformed)
 
     detail_facets = {}
     for fid in facets:
-        rec = ev_doc.get(fid) or {}
+        rec = as_dict(ev_doc.get(fid), f"property_evidence.json[{fid}]",
+                      problems)
         status = rec.get("status")
         ev = evidence_on_disk(rec.get("evidence"), cards_by_id, fid,
                               "evidence", problems)
         confirming = [e for e in ev if e.get("relation") != "contradicts"]
         contradicting = [e for e in ev if e.get("relation") == "contradicts"]
-        checks = count_checks(per_tag, texts, fid)
+        checks = count_checks(per_tag, untagged, fid)
         if not status:
             problems.append(f"{fid}: no status in property_evidence.json")
         elif status not in PROPERTY_STATUSES:
@@ -1012,10 +1110,13 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
     adoption ceiling additionally counts the `adopters` evidence list, so
     'popular but unvalidated' — the mode's headline case — is recordable."""
     problems = []
-    reqs = mode_doc.get("requirements") or []
-    doc = read_json(os.path.join(root, "state", "solutions.json"), {})
-    sols = doc.get("solutions") or {}
-    unsolved = doc.get("unsolved_requirements") or []
+    reqs = string_ids(mode_doc.get("requirements"),
+                      "mode.json requirements", problems)
+    doc = as_dict(read_json(os.path.join(root, "state", "solutions.json"),
+                            {}), "solutions.json", problems)
+    sols = as_dict(doc.get("solutions"), "solutions.json solutions", problems)
+    unsolved = string_ids(doc.get("unsolved_requirements"),
+                          "unsolved_requirements", problems)
     if not reqs:
         problems.append("mode.json requirements is empty; fill it after P0")
     if not sols:
@@ -1029,13 +1130,15 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
                         "a requirement missing from the graph escapes the "
                         "corpus floors.")
 
-    per_tag, texts, malformed = role_target_checks(root, "solution_check")
+    per_tag, untagged, malformed = role_target_checks(root, "solution_check")
     problems.extend(malformed)
 
     def indep_of(own, evidence):
         """Independent groups among evidence: pairwise-disjoint author sets,
-        disjoint from `own`. Requires a known `own` — an authorless defining
-        card cannot establish independence (never grants it)."""
+        disjoint from `own`. Fail-closed on an unknown `own` — an authorless
+        defining card cannot establish independence, so it grants none."""
+        if not own:
+            return 0
         return max_disjoint_groups(
             [g for g in (card_authors(cards_by_id.get(e.get("node")))
                          for e in evidence) if g and not (g & own)])
@@ -1043,6 +1146,7 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
     covered = set()
     detail_sols = {}
     for sid, s in sols.items():
+        s = as_dict(s, f"solutions.json[{sid}]", problems)
         node = s.get("node")
         own = card_authors(cards_by_id.get(node))
         authors_known = bool(own)
@@ -1052,10 +1156,14 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
             problems.append(f"{sid}: defining node {node!r} has no "
                             "bib.authors -- independence cannot be "
                             "established; record the authors or maintainers")
-        for r, level in (s.get("covers") or {}).items():
+        for r, level in as_dict(s.get("covers"), f"{sid} covers",
+                                problems).items():
             if r not in reqs:
                 problems.append(f"{sid}: covers key {r!r} is not a declared "
                                 "requirement in mode.json")
+            elif level not in ("full", "partial", "none"):
+                problems.append(f"{sid}: covers[{r}]={level!r} is not "
+                                "full|partial|none")
             elif level in ("full", "partial"):
                 covered.add(r)
         v = s.get("validity") or {}
@@ -1067,8 +1175,7 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
         refs = evidence_on_disk(v.get("refutations"), cards_by_id, sid,
                                 "refutation", problems)
         support = conf + reuse
-        indep = indep_of(own, support) if authors_known else 0
-        checks = count_checks(per_tag, texts, sid, names=(s.get("name"),))
+        indep = indep_of(own, support)
         if not status:
             problems.append(f"{sid}: no validity.status recorded")
         elif status not in SOLUTION_STATUSES:
@@ -1093,26 +1200,33 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
                                 "1 at reliability >= "
                                 f"{OVERTURN_RELIABILITY_MIN}")
         elif status == "unvalidated":
+            checks = count_checks(per_tag, untagged, sid,
+                                  names=(s.get("name"),))
             if checks < SOLUTION_CHECK_QUERIES_MIN:
                 problems.append(f"{sid}: unvalidated with {checks} distinct "
                                 "solution_check queries (need "
                                 f"{SOLUTION_CHECK_QUERIES_MIN})")
-        adoption = s.get("adoption") or {}
+        adoption = as_dict(s.get("adoption"), f"{sid} adoption", problems)
         adopters = evidence_on_disk(adoption.get("adopters"), cards_by_id,
                                     sid, "adopter", problems)
-        adoption_ceiling = (indep_of(own, support + adopters)
-                            if authors_known else 0)
+        adoption_ceiling = (indep_of(own, support + adopters) if adopters
+                            else indep)
         rec = adoption.get("adopter_groups")
-        if rec is not None:
-            if isinstance(rec, bool) or not isinstance(rec, int):
-                problems.append(f"{sid}: adopter_groups={rec!r} is not an "
-                                "integer -- a metric that cannot be computed "
-                                "counts as failed (§12.1)")
-            elif authors_known and rec > adoption_ceiling:
-                problems.append(f"{sid}: adopter_groups={rec} overstates the "
-                                f"{adoption_ceiling} independent groups "
-                                "computable from evidence on disk (add the "
-                                "adopting works to adoption.adopters)")
+        if rec is None:
+            # Fail-closed: both axes are explicit (§23.6). An unrecorded
+            # adoption axis is not a passing one — zero is honest.
+            problems.append(f"{sid}: adoption.adopter_groups not recorded "
+                            "-- both axes must be explicit; 0 is honest "
+                            "(§23.6)")
+        elif isinstance(rec, bool) or not isinstance(rec, int):
+            problems.append(f"{sid}: adopter_groups={rec!r} is not an "
+                            "integer -- a metric that cannot be computed "
+                            "counts as failed (§12.1)")
+        elif authors_known and rec > adoption_ceiling:
+            problems.append(f"{sid}: adopter_groups={rec} overstates the "
+                            f"{adoption_ceiling} independent groups "
+                            "computable from evidence on disk (add the "
+                            "adopting works to adoption.adopters)")
         org = adoption.get("org_backing") or {}
         if org.get("active") and org.get("evidence_node") not in cards_by_id:
             problems.append(f"{sid}: org_backing.active without an evidence "
@@ -1133,15 +1247,17 @@ def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
             problems.append(f"{r}: no solution covers it and it is not "
                             "declared unsolved")
         elif r in unsolved:
-            checks = count_checks(per_tag, texts, r)
+            checks = count_checks(per_tag, untagged, r)
             if checks < SOLUTION_CHECK_QUERIES_MIN:
                 problems.append(f"{r}: unsolved with {checks} distinct "
                                 "solution_check queries (need "
                                 f"{SOLUTION_CHECK_QUERIES_MIN})")
 
+    shown = problems if len(problems) <= 30 else \
+        problems[:30] + [f"...and {len(problems) - 30} more"]
     detail = {"solutions": detail_sols, "unsolved": unsolved,
               "requirements_covered": sorted(covered & set(reqs)),
-              "problems": problems[:12]}
+              "problems": shown}
     return not problems, detail
 
 
@@ -1231,6 +1347,11 @@ def main():
     # --- §12 gates, thresholds scaled by run mode (§23)
     mode_doc = load_mode(root)
     mode = mode_doc["mode"]
+    if mode_doc.get("invalid_declared_mode"):
+        print(f"[graph_metrics] WARNING: declared mode "
+              f"{mode_doc['invalid_declared_mode']!r} is not a valid mode; "
+              f"gating as fresh. Fix state/mode.json (§23.0).",
+              file=sys.stderr)
     floors = mode_doc.get("floors") or {}
     delta_components = mode_doc.get("delta_components") or []
     if mode == "incremental":
@@ -1267,7 +1388,8 @@ def main():
     rt_streak, rt_notes = redteam_null_streak_verified(root, rnd)
     fidelity, n_audited, fidelity_problems = card_fidelity(root, rnd)
     opp_ok, opp_detail = opportunity_coverage(root, graph, rnd,
-                                              start_round=prospector_start)
+                                              start_round=prospector_start,
+                                              cards_by_id=cards_by_id)
     unexplored = [c["id"] for c in graph.get("clusters", [])
                   if c.get("expansion_state") == "unexplored"]
 
@@ -1460,6 +1582,7 @@ def main():
         "mode": mode,
         "computed": datetime.now(timezone.utc).isoformat(),
         "gates": gates,
+        "invalid_declared_mode": mode_doc.get("invalid_declared_mode"),
         "all_pass": all_pass,
         "report_unlocked": False,          # requires validator exit 0 as well
         "next_round_guidance": guidance,

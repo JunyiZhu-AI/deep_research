@@ -108,6 +108,16 @@ INCREMENTAL_FLOORS = {
 ANCHOR_KINDS = ("paper", "repo", "techreport", "thesis", "blogpost")
 
 
+def nonempty(value):
+    """argparse type: an explicitly passed but empty value is almost always
+    an unset shell variable, and for --slug it scaffolds into the shared
+    runs root itself. Reject it at the parser, uniformly."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError(
+            "is empty -- check your shell variable (MANUAL §23.3)")
+    return value.strip()
+
+
 def have_binary(name):
     return shutil.which(name) is not None
 
@@ -286,46 +296,34 @@ def probe(url, timeout=12):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--slug", required=True, help="short name for this run")
-    ap.add_argument("--root", default="runs")
+    ap.add_argument("--slug", required=True, type=nonempty,
+                    help="short name for this run")
+    ap.add_argument("--root", default="runs", type=nonempty)
     ap.add_argument("--no-probe", action="store_true",
                     help="skip network probes (offline setup)")
     ap.add_argument("--force", action="store_true",
                     help="scaffold into a directory that already exists")
-    ap.add_argument("--base-run", default=None,
+    ap.add_argument("--base-run", default=None, type=nonempty,
                     help="path to a completed run; imports its corpus and sets "
                          "mode: incremental (MANUAL §23.1)")
     ap.add_argument("--seed-only", action="store_true",
                     help="with --base-run: import the corpus but keep mode: "
                          "fresh with full floors (MANUAL §23.3)")
-    ap.add_argument("--anchor", default=None,
+    ap.add_argument("--anchor", default=None, type=nonempty,
                     help="URL of the anchor artifact; sets mode: anchored "
                          "(MANUAL §23.2)")
     ap.add_argument("--anchor-kind", default="paper", choices=ANCHOR_KINDS)
-    ap.add_argument("--subject", default=None,
+    ap.add_argument("--subject", default=None, type=nonempty,
                     help="URL of the paper to run a retrospective on; sets "
                          "mode: retrospective (MANUAL §23.4)")
     ap.add_argument("--subject-kind", default="paper", choices=ANCHOR_KINDS)
-    ap.add_argument("--concept", default=None, metavar="TERM",
+    ap.add_argument("--concept", default=None, type=nonempty, metavar="TERM",
                     help="a term to resolve and consolidate; sets mode: "
                          "concept (MANUAL §23.5)")
-    ap.add_argument("--problem", default=None, metavar="STATEMENT",
+    ap.add_argument("--problem", default=None, type=nonempty, metavar="STATEMENT",
                     help="a problem to find trusted solutions for; sets mode: "
                          "problem (MANUAL §23.6)")
     args = ap.parse_args()
-
-    # An explicitly passed but empty mode flag (classic: an unset shell
-    # variable) must never silently fall through to mode: fresh — the
-    # wrong-mode failure costs the whole run (§23.0).
-    for flag, attr in (("--base-run", "base_run"), ("--anchor", "anchor"),
-                       ("--subject", "subject"), ("--concept", "concept"),
-                       ("--problem", "problem")):
-        val = getattr(args, attr)
-        if val is not None:
-            if not val.strip():
-                sys.exit(f"[init] {flag} was given but is empty -- check "
-                         "your shell variable (MANUAL §23.3).")
-            setattr(args, attr, val.strip())
 
     if sum(bool(x) for x in (args.base_run, args.anchor, args.subject,
                              args.concept, args.problem)) > 1:

@@ -397,6 +397,14 @@ in it is load-bearing in a way an ordinary README's is not.
   disjoint-author test for `replicated` sees author strings only: the same
   group under different spellings, or serial collaborators publishing
   separately, both evade it.
+- **Proof-of-search text matching has an irreducible residual.** After the
+  second review round, a query tagged for one target no longer text-credits
+  a different one, and matching is word-boundary with underscores. What
+  remains: an UNTAGGED query whose text incidentally contains a short id
+  token ("f1 score" crediting facet F1) still counts. No string mechanism
+  can distinguish that from a genuine untagged search; the mitigation is
+  behavioral — tag your check queries — and the backstop is the fidelity
+  audit, per the accounting-not-judgment rule.
 - **The §23.6 solution gate cross-checks structure, not truth.** A
   confirmation card's existence on disk is verified; that it actually
   confirms the solution is not — the same fidelity dependence as everywhere

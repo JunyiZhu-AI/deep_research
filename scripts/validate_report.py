@@ -123,10 +123,22 @@ def sentences(text):
     return [s.strip() for s in SENT_SPLIT.split(text) if len(s.split()) > 2]
 
 
+# §23.0 — single source of truth in mode_defs.py; literal fallback only for
+# a script copied out of the tree alone.
+try:
+    from mode_defs import VALID_MODES, NOVELTY_MODES
+except ImportError:
+    VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
+                   "concept", "problem")
+    NOVELTY_MODES = ("fresh", "incremental", "anchored")
+
+
 def id_present(needle, hay):
     """Word-boundary ID containment. Raw substring lets SOL-1 hide behind
-    SOL-10 and vaswani2017attention behind vaswani2017attention_b."""
-    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(needle)
+    SOL-10 and vaswani2017attention behind vaswani2017attention_b. Coerces
+    the needle — agent-written JSON may hold a number where an ID belongs,
+    and that is a defect to report, not a TypeError to die on."""
+    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(str(needle))
                      + r"(?![A-Za-z0-9_])", hay) is not None
 
 
@@ -139,10 +151,18 @@ def load_json(path, default=None):
 
 
 def load_mode(root):
-    """§23.0 — mode.json is the single source of truth; absent = fresh."""
-    doc = load_json(os.path.join(root, "state", "mode.json"), {}) or {}
-    mode = doc.get("mode", "fresh")
-    return mode, doc
+    """§23.0 — mode.json is the single source of truth; absent = fresh.
+
+    Returns (mode, mode_doc, declared): `declared` is the raw string so an
+    invalid declaration becomes a blocking defect instead of silently
+    disabling every mode-scoped check."""
+    doc = load_json(os.path.join(root, "state", "mode.json"), {})
+    if not isinstance(doc, dict):
+        return "fresh", {}, repr(doc)
+    declared = doc.get("mode", "fresh")
+    if declared not in VALID_MODES:
+        return "fresh", doc, declared
+    return declared, doc, declared
 
 
 def check_readability(md, sections, d, mode="fresh"):
@@ -151,7 +171,7 @@ def check_readability(md, sections, d, mode="fresh"):
     # NOVELTY verdict's shape and apply only to the modes that produce one —
     # retrospective/concept/problem §0 formats (§23.4-§23.6) have their own
     # mode checks in check_completeness.
-    novelty_verdict = mode in ("fresh", "incremental", "anchored")
+    novelty_verdict = mode in NOVELTY_MODES
     if 0 not in sections:
         d.add("no_verdict_section", "§0", "report has no '## 0.' verdict section")
     else:
@@ -252,7 +272,7 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
     lit = sections.get(5, ("", ""))[1]
     for c in graph.get("clusters", []) or []:
         label, cid = (c.get("label") or "").strip(), c.get("id", "")
-        if label and label not in lit and cid not in lit:
+        if label and label not in lit and not id_present(cid, lit):
             d.add("cluster_not_discussed", cid,
                   f"thread '{label}' identified by the graph but absent from §5")
         if re.fullmatch(r"cluster[_\-]?\d+", label or "", re.I):
@@ -280,7 +300,7 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
                     o = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if o.get("id") and o["id"] not in nxt:
+                if o.get("id") and not id_present(o["id"], nxt):
                     d.add("opportunity_not_reported", o["id"], "absent from §7")
                 if not (o.get("why_now") or "").strip():
                     d.add("opportunity_no_why_now", o.get("id", "?"),
@@ -378,15 +398,21 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
         # museum has a mechanical backstop like every other mode subsection.
         body = sections.get(0, ("", ""))[1]
         sol_doc = load_json(os.path.join(root, "state", "solutions.json"),
-                            {}) or {}
-        sol_ids = list(sol_doc.get("solutions") or {})
+                            {})
+        sol_doc = sol_doc if isinstance(sol_doc, dict) else {}
+        sol_ids = [str(i) for i in (sol_doc.get("solutions") or {})]
         # The table check is derived from the registry's ACTUAL ids — no
-        # naming convention is imposed (the old literal 'SOL-' both
-        # false-blocked compliant reports and false-passed table-free ones).
-        if sol_ids:
-            row_pat = re.compile(
-                r"^\s*\|.*(?:" +
-                "|".join(re.escape(i) for i in sol_ids) + r")", re.M)
+        # naming convention is imposed. An empty or missing registry is a
+        # blocking defect, never a skipped check (fail-closed).
+        if not sol_ids:
+            d.add("solutions_registry_missing", "state/solutions.json",
+                  "problem-mode delivery with no solutions registry -- the "
+                  "§0 ranked table cannot be verified and the run has "
+                  "nothing to recommend (§23.6)")
+        else:
+            guard = r"(?<![A-Za-z0-9_])(?:" + \
+                "|".join(re.escape(i) for i in sol_ids) + r")(?![A-Za-z0-9_])"
+            row_pat = re.compile(r"^\s*\|.*" + guard, re.M)
             if not row_pat.search(body):
                 d.add("recommendation_missing", "§0",
                       "problem §0 must contain the ranked recommendation "
@@ -401,8 +427,14 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
                 d.add("unsolved_not_in_verdict", r,
                       "unsolved requirement absent from §0 — that is a "
                       "headline finding (§23.6)")
+        # A museum laid out as a table is a fine museum: count content
+        # words with table cells included (prose_only strips them), only
+        # headings and pipes excluded.
         sec3 = sections.get(3, ("", ""))[1]
-        if len(prose_only(sec3).split()) < 30:
+        content = re.sub(r"^#+.*$", " ", sec3, flags=re.M)
+        content = re.sub(r"^\s*\|[-\s|:]+\|\s*$", " ", content, flags=re.M)
+        words = len(content.replace("|", " ").split())
+        if words < 30:
             d.add("failure_museum_missing", "§3",
                   "problem runs must carry the failure museum — what was "
                   "tried and abandoned, with the stated reasons; if nothing "
@@ -425,7 +457,12 @@ def main():
 
     d = Defects()
     sections = split_sections(md)
-    mode, mode_doc = load_mode(args.run_root)
+    mode, mode_doc, declared = load_mode(args.run_root)
+    if declared != mode:
+        d.add("mode_invalid", "state/mode.json",
+              f"declared mode {declared!r} is not one of {VALID_MODES}; "
+              "checks ran as fresh, but the declaration itself is a defect "
+              "-- fix mode.json, do not work around it (§23.0)")
     check_readability(md, sections, d, mode)
     check_completeness(md, sections, args.run_root, d, mode, mode_doc)
 
