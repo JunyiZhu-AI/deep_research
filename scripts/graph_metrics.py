@@ -65,17 +65,11 @@ ANCHOR_QUERIES_MIN = 10       # distinct role:"anchor_forward" queries (anchored
 DESCENT_QUERIES_MIN = 15      # distinct role:"descent" queries
 DESCENT_TRIAGE_MIN = 0.95     # fraction of generation-1 rows triaged
 CLAIM_CHECK_QUERIES_MIN = 5   # per-claim proof of search for an `ignored` fate
-OVERTURN_RELIABILITY_MIN = 0.75
 CLAIM_FATES = {"held", "disputed", "overturned", "developed", "varied",
                "repurposed", "abandoned", "ignored"}
 
-# §23.4 reliability inputs (weighting, never censorship — banned behavior 46).
-STRENGTH_W = {"strong": 1.0, "moderate": 0.6, "weak": 0.3}
-EVIDENCE_W = {"benchmark": 1.0, "ablation": 1.0, "theory": 0.8, "anecdote": 0.4}
-
 # §23.5 concept mode.
 SENSE_CONFIRM_MIN = 2         # retrieved uses per sense
-ALIAS_QUERIES_MIN = 2         # logged queries containing each alias
 SIBLING_CARDS_MIN = 3         # digested cards per sibling concept
 SIBLINGS_MIN = 2
 PROPERTY_CHECK_QUERIES_MIN = 5
@@ -86,16 +80,14 @@ PROPERTY_STATUSES = {"replicated", "demonstrated", "contested", "refuted",
 SOLUTION_CHECK_QUERIES_MIN = 5
 SOLUTION_STATUSES = {"proven", "promising", "contested", "failed",
                      "unvalidated"}
-PROVEN_INDEPENDENT_GROUPS_MIN = 2
 
 # The run-state contract (modes, shape validation, matching) lives in
 # state_io.py and is copied into every run beside this file. No literal
 # fallback copies: duplicated definitions are what drifted before.
 try:
-    from state_io import (VALID_MODES, load_mode, read_json_object,
-                          read_jsonl_objects, cap, as_dict, as_id_list,
-                          as_count, as_evidence, as_node_refs,
-                          id_present, term_pattern)
+    from state_io import (load_mode, read_json_object, read_jsonl_objects,
+                          cap, as_dict, as_id_list, as_count, as_evidence,
+                          as_node_refs, term_pattern)
 except ImportError:
     sys.exit("[graph_metrics] state_io.py must sit beside this script "
              "(init_run.py copies it into the run).")
@@ -326,18 +318,32 @@ def temporal_density(graph):
 
 # --- saturation gates (§12) ------------------------------------------------
 
+_CARD_PROBLEMS = []
+
+
+def card_problems():
+    return _CARD_PROBLEMS
+
+
 def load_cards(run_root):
+    """Corpus cards are the largest agent-written surface in the run, so
+    they go through the same boundary as every other state file: a card
+    that is unreadable or is not an object is a stated problem (surfaced by
+    the state_readable gate), never a silent drop and never a crash. A
+    silent drop is worse than it sounds — every record citing that card
+    would then be reported as a fabricated citation."""
     cards_dir = os.path.join(run_root, "corpus", "cards")
     cards = []
     if not os.path.isdir(cards_dir):
         return cards
     for name in sorted(os.listdir(cards_dir)):
         if name.endswith(".json"):
-            try:
-                with open(os.path.join(cards_dir, name), encoding="utf-8") as fh:
-                    cards.append(json.load(fh))
-            except (json.JSONDecodeError, OSError):
-                print(f"[graph_metrics] warn: unreadable card {name}", file=sys.stderr)
+            doc, problems = read_json_object(os.path.join(cards_dir, name),
+                                             owner=f"corpus/cards/{name}")
+            if problems:
+                _CARD_PROBLEMS.extend(problems)
+                continue
+            cards.append(doc)
     return cards
 
 
@@ -485,20 +491,6 @@ def redteam_null_streak_verified(run_root, current_round):
     return streak, notes
 
 
-def redteam_null_streak(run_root, current_round):
-    threats = read_jsonl(os.path.join(run_root, "redteam", "threats.jsonl"))
-    by_round = defaultdict(list)
-    for t in threats:
-        if t.get("threat_level") in ("medium", "high", "critical"):
-            by_round[t.get("round_added", -1)].append(t)
-    streak = 0
-    r = current_round
-    while r >= 0 and not by_round.get(r):
-        streak += 1
-        r -= 1
-    return streak
-
-
 def card_fidelity(root, current_round, window=CARD_FIDELITY_ROUNDS):
     """§12.2 -- the hollow-corpus defense.
 
@@ -585,58 +577,93 @@ def opportunity_coverage(root, graph, current_round,
     return ok, detail
 
 
-def card_authors(card):
-    """Normalized author set of a card. Empty means UNKNOWN, not 'nobody' —
-    callers must treat an empty set as inability to establish independence,
-    never as universal independence."""
-    return {str(a).strip().lower()
-            for a in ((card or {}).get("bib") or {}).get("authors", []) or []}
+# --- §23 mode gates: one kernel, four rules ---------------------------------
+#
+# Four review rounds concentrated ~60 defects in six hand-written per-mode
+# gates. They failed for one reason: each walked its own agent-written
+# structure and each invented its own arithmetic — independence over author
+# sets, adoption ceilings, reliability-weighted corroboration, per-alias
+# query matching. That arithmetic was attempting JUDGMENT ("is this
+# confirmation genuinely independent?") through string and set operations
+# over JSON an agent wrote, which is the one thing §1 assigns to the agent
+# and its adversaries, never to a script.
+#
+# What remains is accounting, applied identically in every mode:
+#
+#   1. the mode's record file parses and is an object
+#   2. every declared target carries a status from that mode's set
+#   3. every evidence node the record cites exists on disk   (§1.4 firewall)
+#   4. a "nothing found" status carries its proof-of-search floor;
+#      every other status carries at least one on-disk evidence node
+#
+# Judgment about whether that evidence is any good lives where the manual
+# puts it: the red team, the §12.2 fidelity audit, and the operator reading
+# the report. See docs/AUDIT.md for why this replaced the earlier design.
+
+TARGET_GATES = {
+    "retrospective": {
+        "gate": "claim_coverage", "section": "§23.4",
+        "targets_from": "mode", "targets_key": "claims",
+        "records_file": "claim_fates.json", "records_key": None,
+        "status_key": "fate", "statuses": CLAIM_FATES,
+        "evidence_paths": [("evidence", "evidence")],
+        "role": "claim_check", "search_min": CLAIM_CHECK_QUERIES_MIN,
+        "search_statuses": {"ignored"},
+        "evidence_optional": {"ignored", "abandoned"},
+        "name_key": None,
+    },
+    "concept": {
+        "gate": "property_coverage", "section": "§23.5",
+        "targets_from": "mode", "targets_key": "facets",
+        "records_file": "property_evidence.json", "records_key": None,
+        "status_key": "status", "statuses": PROPERTY_STATUSES,
+        "evidence_paths": [("evidence", "evidence")],
+        "role": "property_check", "search_min": PROPERTY_CHECK_QUERIES_MIN,
+        "search_statuses": {"folklore"},
+        "evidence_optional": {"folklore"},
+        "name_key": None,
+    },
+    "problem": {
+        "gate": "solution_coverage", "section": "§23.6",
+        "targets_from": "records", "targets_key": None,
+        "records_file": "solutions.json", "records_key": "solutions",
+        "status_key": None,          # nested: validity.status
+        "status_path": "validity.status", "statuses": SOLUTION_STATUSES,
+        "evidence_paths": [("validity.confirmations", "confirmation"),
+                           ("validity.reuses", "reuse"),
+                           ("validity.refutations", "refutation"),
+                           ("adoption.adopters", "adopter")],
+        "role": "solution_check", "search_min": SOLUTION_CHECK_QUERIES_MIN,
+        "search_statuses": {"unvalidated"},
+        "evidence_optional": {"unvalidated"},
+        "name_key": "name",
+    },
+}
 
 
-def max_disjoint_groups(groups):
-    """Size of the largest set of pairwise-disjoint author groups.
-
-    Deterministic and never order-dependent: groups are deduplicated and
-    sorted canonically, a size-ascending greedy pass sets a floor, and an
-    exact branch-and-bound — initialized at that floor, so it can only
-    improve — computes the answer. Used by §23.5 `replicated` and §23.6
-    `proven` so the two gates cannot disagree on the same evidence.
-
-    The exact search is cheap in practice (24 adversarial groups measured
-    at 2-6 ms) because the bound prunes hard, but a pathological input
-    should slow a gate, never hang a run: past a generous node budget the
-    search stops and returns the best found so far, which is a floor and
-    therefore still safe to compare a self-reported count against."""
-    uniq = sorted({frozenset(g) for g in groups if g},
-                  key=lambda s: (len(s), tuple(sorted(s))))
-    taken, best = frozenset(), 0
-    for g in uniq:
-        if not (g & taken):
-            taken |= g
-            best += 1
-    budget = [200000]
-
-    def rec(i, chosen, count):
-        nonlocal best
-        best = max(best, count)
-        budget[0] -= 1
-        if budget[0] <= 0 or i >= len(uniq) or \
-                count + (len(uniq) - i) <= best:
-            return
-        if not (uniq[i] & chosen):
-            rec(i + 1, chosen | uniq[i], count + 1)
-        rec(i + 1, chosen, count)
-
-    rec(0, frozenset(), 0)
-    return best
+def dotted(rec, path, owner, problems):
+    """Fetch a nested field, shape-checking every hop. Returns None if any
+    hop is not an object — reported, never an AttributeError."""
+    cur = rec
+    for i, part in enumerate(path.split(".")):
+        cur = as_dict(cur, f"{owner}.{'.'.join(path.split('.')[:i])}".rstrip("."),
+                      problems).get(part) if i else cur.get(part)
+        if cur is None:
+            return None
+        if i + 1 < len(path.split(".")) and not isinstance(cur, dict):
+            problems.append(f"{owner}: {path} — {part} is a "
+                            f"{type(cur).__name__}, not an object")
+            return None
+    return cur
 
 
-def role_target_checks(root, role):
-    """Proof-of-search accounting for the *_check roles (§12.0, §23.4–§23.6).
+def role_query_index(root, role):
+    """Distinct query texts per normalized tag, plus texts carrying no tag.
 
-    Returns (per_tag, untagged, problems): distinct query texts per
-    normalized tag, texts carrying no readable tag, and legible complaints
-    for rows the accounting cannot read.
+    Tags that name no declared target are surfaced as a NOTE, not a gate
+    problem: `seen_queries.jsonl` is append-only, so a blocking verdict on a
+    typo would be unfixable without rewriting the log the gate exists to
+    trust.
     """
     per_tag, untagged, problems = defaultdict(set), set(), []
     for q in read_jsonl(os.path.join(root, "state", "seen_queries.jsonl")):
@@ -651,12 +678,13 @@ def role_target_checks(root, role):
             continue
         tags = [claim] if isinstance(claim, str) else \
                list(claim) if isinstance(claim, (list, tuple)) else None
-        if tags is None or not all(isinstance(t, str) for t in tags):
+        if tags is None:
             problems.append(f"{role} row has unreadable claim {claim!r} — "
                             "use a string or list of strings (§12.0)")
             untagged.add(text)
             continue
-        clean = [t.strip().lower() for t in tags if t.strip()]
+        clean = [t.strip().lower() for t in tags
+                 if isinstance(t, str) and t.strip()]
         if not clean:
             untagged.add(text)
         for t in clean:
@@ -664,65 +692,37 @@ def role_target_checks(root, role):
     return per_tag, untagged, cap(problems, 4, f"malformed {role} rows")
 
 
-def orphan_tag_problems(per_tag, known, role):
-    """A tag naming no declared target is almost always a typo, and it is
-    the silent kind: the query sinks into a bucket nothing reads, crediting
-    neither the intended target nor anything else. Name it (§12.0)."""
-    known_keys = {str(k).strip().lower() for k in known}
-    orphans = sorted(t for t in per_tag if t not in known_keys)
-    return cap([f"{role} queries tagged {t!r}, which is not a declared "
-                "target — typo? those queries credit nothing" for t in orphans],
-               3, f"orphan {role} tags")
-
-
 def count_checks(per_tag, untagged, target, names=()):
-    """Distinct queries that count for a target (§12.0).
+    """Distinct queries counting toward a target's proof of search (§12.0).
 
-    A tagged query counts for the targets it declares. An UNTAGGED query
+    A tagged query counts for the targets it declares. An untagged query
     counts for any target its id or name appears in, since the text is then
-    the only statement of intent available. A query tagged for something
-    else is that target's evidence, not this one's — otherwise an unrelated
-    query mentioning "f1 score" certifies facet F1's proof-of-search.
-    Ids match exactly; names tolerate plurals, because "gans for tabular
-    data" is a better alias search than "gan", not a worse one.
+    the only statement of intent available. Ids match exactly; names match
+    with plural tolerance, because "gans for tabular data" is a better alias
+    search than "gan", not a worse one.
     """
-    key = str(target).strip().lower()
-    hits = set(per_tag.get(key, set()))
+    hits = set(per_tag.get(str(target).strip().lower(), set()))
     pats = []
     if isinstance(target, str) and target.strip():
         pats.append(re.compile(r"(?<![a-z0-9_])"
                                + re.escape(target.strip().lower())
                                + r"(?![a-z0-9_])"))
     for n in names:
-        for one in (n if isinstance(n, (list, tuple)) else [n]):
-            pat = term_pattern(one)
-            if pat:
-                pats.append(pat)
+        pat = term_pattern(n)
+        if pat:
+            pats.append(pat)
     for t in untagged:
         if any(p.search(t) for p in pats):
             hits.add(t)
     return len(hits)
 
 
-def strongly_refuted(contradicting, cards_by_id, author_counts):
-    """The shared corroboration bar for the strongest negative verdicts
-    (§23.4 overturned, §23.5 refuted, §23.6 failed): two contradicting
-    cards, or one at high reliability."""
-    if len(contradicting) >= 2:
-        return True
-    return any(reliability(cards_by_id[e["node"]], author_counts)
-               >= OVERTURN_RELIABILITY_MIN for e in contradicting)
-
-
 def evidence_on_disk(entries, cards_by_id, owner, label, problems):
-    """Split evidence into on-disk entries and gate problems for the rest.
-
-    A fabricated citation is the worst thing a run can produce (§1.4);
-    silently filtering it out lets it flow into the report unflagged. Shape
-    is validated at the boundary (as_evidence), so anything arriving here
-    is already an object list."""
+    """The §1.4 fabrication firewall, applied identically everywhere: a
+    cited node that is not in the corpus is a gate problem, never silently
+    dropped and never a crash."""
     ok = []
-    for e in as_evidence(entries, owner, problems):
+    for e in as_evidence(entries, f"{owner} {label}", problems):
         node = e.get("node")
         if node in cards_by_id:
             ok.append(e)
@@ -731,36 +731,168 @@ def evidence_on_disk(entries, cards_by_id, owner, label, problems):
     return ok
 
 
+def target_coverage(root, cards_by_id, mode_doc, spec):
+    """The kernel. Four rules, no judgment (see the note above)."""
+    problems, notes = [], []
+    records, rp = read_json_object(os.path.join(root, "state",
+                                                spec["records_file"]))
+    problems.extend(rp)
+
+    if spec["targets_from"] == "mode":
+        key = spec["targets_key"]
+        targets = as_id_list(mode_doc.get(key), f"mode.json {key}", problems)
+        table = records
+        if not targets:
+            problems.append(f"mode.json {key} is empty; fill it after P0")
+    else:
+        table = as_dict(records.get(spec["records_key"]),
+                        f"{spec['records_file']} {spec['records_key']}",
+                        problems)
+        targets = []
+        for t in table:
+            if isinstance(t, str) and t.strip():
+                targets.append(t)
+            else:
+                problems.append(f"{spec['records_file']}: record key {t!r} is "
+                                "not a non-empty string")
+        if not targets:
+            problems.append(f"state/{spec['records_file']} has no records")
+
+    per_tag, untagged, qp = role_query_index(root, spec["role"])
+    problems.extend(qp)
+    known = {str(t).strip().lower() for t in targets}
+    orphans = sorted(t for t in per_tag if t not in known)
+    if orphans:
+        notes.append(f"{spec['role']} tags naming no declared target "
+                     f"(probable typos; they credit nothing): {orphans[:5]}")
+
+    detail = {}
+    for t in targets:
+        rec = as_dict(table.get(t), f"{spec['records_file']}[{t}]", problems)
+        if "status_path" in spec:
+            status = dotted(rec, spec["status_path"], f"{t}", problems)
+        else:
+            status = rec.get(spec["status_key"])
+        ev = []
+        for path, label in spec["evidence_paths"]:
+            raw = dotted(rec, path, f"{t}", problems) if "." in path \
+                else rec.get(path)
+            ev.extend(evidence_on_disk(raw, cards_by_id, t, label, problems))
+        names = [rec.get(spec["name_key"])] if spec.get("name_key") else []
+        checks = count_checks(per_tag, untagged, t, names=names)
+
+        if not status:
+            problems.append(f"{t}: no status recorded in "
+                            f"{spec['records_file']} ({spec['section']})")
+        elif status not in spec["statuses"]:
+            problems.append(f"{t}: status {status!r} is not one of "
+                            f"{sorted(spec['statuses'])} ({spec['section']})")
+        elif status in spec["search_statuses"]:
+            if checks < spec["search_min"]:
+                problems.append(f"{t}: {status!r} with {checks} distinct "
+                                f"{spec['role']} queries "
+                                f"(need {spec['search_min']}) — a "
+                                "nothing-found verdict must be searched")
+        elif not ev and status not in spec["evidence_optional"]:
+            problems.append(f"{t}: {status!r} with no evidence node on disk")
+        detail[t] = {"status": status, "evidence": len(ev), "checks": checks}
+
+    return not problems, {"targets": detail, "notes": notes,
+                          "problems": cap(problems, 20, "problems")}
+
+
+def requirement_coverage(root, mode_doc, cards_by_id, components):
+    """§23.6 bookkeeping the kernel does not cover: every requirement is
+    either covered by a solution or declared unsolved WITH proof of search,
+    and the two places requirements are declared agree."""
+    problems = []
+    reqs = as_id_list(mode_doc.get("requirements"), "mode.json requirements",
+                      problems)
+    doc, dp = read_json_object(os.path.join(root, "state", "solutions.json"))
+    problems.extend(dp)
+    sols = as_dict(doc.get("solutions"), "solutions.json solutions", problems)
+    unsolved = as_id_list(doc.get("unsolved_requirements"),
+                          "unsolved_requirements", problems)
+    if reqs and set(reqs) != set(components):
+        problems.append("mode.json requirements and graph.meta.components "
+                        f"differ — only in mode.json: "
+                        f"{sorted(set(reqs) - set(components))}; only in "
+                        f"graph: {sorted(set(components) - set(reqs))}. They "
+                        "are one list (§23.6).")
+    covered = set()
+    for sid, s in sols.items():
+        for r, level in as_dict(as_dict(s, f"solutions[{sid}]", problems)
+                                .get("covers"), f"{sid} covers",
+                                problems).items():
+            if r not in reqs:
+                problems.append(f"{sid}: covers key {r!r} is not a declared "
+                                "requirement")
+            elif level not in ("full", "partial", "none"):
+                problems.append(f"{sid}: covers[{r}]={level!r} is not "
+                                "full|partial|none")
+            elif level in ("full", "partial"):
+                covered.add(r)
+    per_tag, untagged, qp = role_query_index(root, "solution_check")
+    problems.extend(qp)
+    for r in unsolved:
+        if r not in reqs:
+            problems.append(f"unsolved entry {r!r} is not a declared "
+                            "requirement — typo or phantom")
+    for r in reqs:
+        if r in covered and r in unsolved:
+            problems.append(f"{r}: both covered and declared unsolved")
+        elif r not in covered and r not in unsolved:
+            problems.append(f"{r}: no solution covers it and it is not "
+                            "declared unsolved")
+        elif r in unsolved:
+            n = count_checks(per_tag, untagged, r)
+            if n < SOLUTION_CHECK_QUERIES_MIN:
+                problems.append(f"{r}: unsolved with {n} distinct "
+                                f"solution_check queries "
+                                f"(need {SOLUTION_CHECK_QUERIES_MIN})")
+    return not problems, {"requirements_covered": sorted(covered & set(reqs)),
+                          "unsolved": unsolved,
+                          "problems": cap(problems, 20, "problems")}
+
+
+# --- per-mode presence checks (counting only) -------------------------------
+
 def is_delta_card(card, delta_components):
-    """§23.1 — a card is delta-scoped if newly digested this run, or inherited
-    but re-adjudicated against at least one delta component. An inherited card
-    without delta per_component entries has not been read against the new
-    question and is invisible to the delta floors on purpose."""
+    """§23.1 — a card is delta-scoped if newly digested this run, or
+    inherited and re-adjudicated against at least one delta component."""
     if not card.get("inherited_from_base"):
         return True
-    pc = (card.get("relation_to_idea") or {}).get("per_component") or {}
+    pc = (card.get("relation_to_idea") or {})
+    pc = pc.get("per_component") if isinstance(pc, dict) else None
+    pc = pc if isinstance(pc, dict) else {}
     return any(c in pc for c in delta_components)
 
 
 def distinct_role_queries(root, role):
-    queries = read_jsonl(os.path.join(root, "state", "seen_queries.jsonl"))
-    distinct = {(q.get("query") or "").strip().lower()
-                for q in queries if q.get("role") == role}
+    rows = read_jsonl(os.path.join(root, "state", "seen_queries.jsonl"))
+    distinct = {str(q.get("query") or "").strip().lower()
+                for q in rows if q.get("role") == role}
     distinct.discard("")
     return len(distinct)
 
 
-def refresh_sweep(root):
-    """§23.1 — the base corpus is frozen at delivery; the field is not.
+def artifact_digested(card_id, cards_by_id, label, problems):
+    """Named artifact must be on disk at full_text depth (§23.2, §23.4)."""
+    if not card_id:
+        problems.append(f"{label}.card_id not set in state/mode.json")
+        return
+    card = cards_by_id.get(card_id)
+    if card is None:
+        problems.append(f"no card on disk for {label} {card_id!r}")
+    elif (card.get("provenance") or {}).get("depth") != "full_text":
+        problems.append(f"{label} card {card_id!r} is not full_text depth")
 
-    Fail-closed: no refresh_sweep.json, or an incomplete one, or too few
-    logged refresh queries, and the gate fails. The self-reported totals are
-    cross-checked against the query log so a bare 'completed: true' does not
-    pass on its own."""
-    doc, problems0 = read_json_object(os.path.join(root, "state",
-                                                   "refresh_sweep.json"))
+
+def refresh_sweep(root):
+    """§23.1 — the base corpus is frozen at delivery; the field is not."""
+    doc, problems = read_json_object(os.path.join(root, "state",
+                                                  "refresh_sweep.json"))
     n_queries = distinct_role_queries(root, "refresh")
-    problems = problems0
     total = as_count(doc.get("base_core_nodes_total"),
                      "refresh_sweep.base_core_nodes_total", problems,
                      allow_missing=True)
@@ -778,502 +910,131 @@ def refresh_sweep(root):
     if n_queries < REFRESH_QUERIES_MIN:
         problems.append(f"{n_queries} distinct role:\"refresh\" queries "
                         f"logged (need {REFRESH_QUERIES_MIN})")
-    detail = {"checked": checked, "total": total,
-              "refresh_queries": n_queries,
-              "new_threats_found": doc.get("new_threats_found"),
-              "problems": problems}
-    return not problems, detail
+    return not problems, {"checked": checked, "total": total,
+                          "refresh_queries": n_queries, "problems": problems}
 
 
-def author_presence_counts(cards):
-    """How often each author appears across the corpus. A corpus-internal
-    standing signal: unbiased by any hardcoded prestige list, computable
-    offline, and it measures presence in THIS neighborhood, which is the
-    neighborhood that matters."""
-    counts = Counter()
-    for c in cards:
-        for a in (c.get("bib") or {}).get("authors", []) or []:
-            key = str(a).strip().lower()
-            if key:
-                counts[key] += 1
-    return counts
-
-
-def reliability(card, author_counts=None):
-    """§23.4 — per-card source reliability in (0, 1].
-
-    Orders descent triage and sets the corroboration bar for strong verdicts
-    (an `overturned` fate). NEVER used to exclude a source or silence a
-    dispute — banned behavior 46."""
-    best = 0.0
-    for cl in (card or {}).get("claims", []) or []:
-        w = STRENGTH_W.get(cl.get("strength"), 0.3) * \
-            EVIDENCE_W.get(cl.get("evidence_type"), 0.6)
-        best = max(best, w)
-    ev = best if best > 0 else 0.5
-
-    bib = (card or {}).get("bib") or {}
-    ext = bib.get("external_citations") or {}
-    count = ext.get("count")
-    cite = min(1.0, math.log10(count + 1) / 5) if isinstance(count, int) else 0.3
-
-    kind = (card or {}).get("artifact_kind")
-    if kind in ("repo", "blogpost"):
-        venue = 0.35
-    elif bib.get("venue") and bib.get("publication_date"):
-        venue = 1.0
-    else:
-        venue = 0.5
-
-    ap = 0.4
-    if author_counts:
-        if any(author_counts.get(str(a).strip().lower(), 0) >= 2
-               for a in bib.get("authors", []) or []):
-            ap = 1.0
-
-    return round(0.40 * ev + 0.30 * cite + 0.15 * venue + 0.15 * ap, 3)
+def anchor_coverage(root, cards_by_id, mode_doc):
+    """§23.2 — anchor digested, its forward citations swept."""
+    problems = []
+    anchor = as_dict(mode_doc.get("anchor"), "mode.json anchor", problems)
+    artifact_digested(anchor.get("card_id"), cards_by_id, "anchor", problems)
+    n = distinct_role_queries(root, "anchor_forward")
+    if n < ANCHOR_QUERIES_MIN:
+        problems.append(f"{n} distinct role:\"anchor_forward\" queries "
+                        f"logged (need {ANCHOR_QUERIES_MIN})")
+    return not problems, {"card_id": anchor.get("card_id"),
+                          "anchor_forward_queries": n, "problems": problems}
 
 
 def descent_coverage(root, cards_by_id, mode_doc):
-    """§23.4 — the descent tree is ledgered, not sampled.
-
-    Every generation-1 citer triaged, every 'digested' row's card actually on
-    disk, and enough distinct descent queries to show the forward sweep
-    happened. Fail-closed like everything else."""
+    """§23.4 — subject digested, generation-1 citers triaged, sweep logged."""
     problems = []
-    subject = mode_doc.get("subject") or {}
-    card_id = subject.get("card_id")
-    if not card_id:
-        problems.append("subject.card_id not set in state/mode.json")
-    else:
-        card = cards_by_id.get(card_id)
-        if card is None:
-            problems.append(f"no card on disk for subject {card_id!r}")
-        elif (card.get("provenance") or {}).get("depth") != "full_text":
-            problems.append(f"subject card {card_id!r} is not full_text depth")
-
+    subject = as_dict(mode_doc.get("subject"), "mode.json subject", problems)
+    artifact_digested(subject.get("card_id"), cards_by_id, "subject",
+                      problems)
     descent_dir = os.path.join(root, "state", "descent")
     gen1 = read_jsonl(os.path.join(descent_dir, "generation_1.jsonl"))
-    generations = sorted(n for n in (os.listdir(descent_dir)
-                                     if os.path.isdir(descent_dir) else [])
-                         if n.startswith("generation_"))
+    triaged_frac = 0.0
     if not gen1:
         problems.append("state/descent/generation_1.jsonl missing or empty")
-        triaged_frac = 0.0
     else:
-        triaged = [r for r in gen1
-                   if r.get("triage") in ("digested", "periphery", "irrelevant")]
+        triaged = [r for r in gen1 if r.get("triage") in
+                   ("digested", "periphery", "irrelevant")]
         triaged_frac = len(triaged) / len(gen1)
         if triaged_frac < DESCENT_TRIAGE_MIN:
             problems.append(f"only {triaged_frac:.0%} of generation-1 rows "
                             f"triaged (need >={DESCENT_TRIAGE_MIN:.0%})")
-        undigested = [r for r in gen1 if r.get("triage") == "digested"
-                      and r.get("card_id") not in cards_by_id]
-        if undigested:
-            problems.append(f"{len(undigested)} generation-1 rows marked "
+        missing = [r.get("card_id") for r in gen1
+                   if r.get("triage") == "digested"
+                   and r.get("card_id") not in cards_by_id]
+        if missing:
+            problems.append(f"{len(missing)} generation-1 rows marked "
                             "digested without a card on disk")
-
-    n_queries = distinct_role_queries(root, "descent")
-    if n_queries < DESCENT_QUERIES_MIN:
-        problems.append(f"{n_queries} distinct role:\"descent\" queries logged "
+    n = distinct_role_queries(root, "descent")
+    if n < DESCENT_QUERIES_MIN:
+        problems.append(f"{n} distinct role:\"descent\" queries logged "
                         f"(need {DESCENT_QUERIES_MIN})")
-
-    detail = {"subject_card": card_id, "generation_1_rows": len(gen1),
-              "triaged_fraction": round(triaged_frac, 3),
-              "generations_present": generations,
-              "descent_queries": n_queries, "problems": problems}
-    return not problems, detail
-
-
-def claim_coverage(root, cards_by_id, mode_doc, author_counts):
-    """§23.4 — every claim carries an evidence-backed fate.
-
-    `ignored` requires proof of search; `overturned` requires corroboration
-    scaled by source reliability. A fate the validator cannot trace to cards
-    on disk is an assertion, and assertions do not pass gates."""
-    problems = []
-    claims = as_id_list(mode_doc.get("claims"), "mode.json claims", problems)
-    fates, fp = read_json_object(os.path.join(root, "state",
-                                              "claim_fates.json"))
-    problems.extend(fp)
-    if not claims:
-        problems.append("mode.json claims is empty; fill it after P0")
-
-    per_tag, untagged, qp = role_target_checks(root, "claim_check")
-    problems.extend(qp)
-    problems.extend(orphan_tag_problems(per_tag, claims, "claim_check"))
-
-    detail_claims = {}
-    for cl in claims:
-        f = as_dict(fates.get(cl), f"claim_fates.json[{cl}]", problems)
-        fate = f.get("fate")
-        ev = evidence_on_disk(f.get("evidence"), cards_by_id, cl,
-                              "evidence", problems)
-        contradicting = [e for e in ev
-                         if e.get("relation") == "contradicts"]
-        checks = count_checks(per_tag, untagged, cl)
-        if not fate:
-            problems.append(f"{cl}: no fate recorded in claim_fates.json")
-        elif fate not in CLAIM_FATES:
-            problems.append(f"{cl}: fate {fate!r} not in the §23.4 taxonomy")
-        elif fate == "ignored":
-            if checks < CLAIM_CHECK_QUERIES_MIN:
-                problems.append(f"{cl}: ignored with {checks} distinct "
-                                f"claim_check queries "
-                                f"(need {CLAIM_CHECK_QUERIES_MIN})")
-        elif fate == "overturned":
-            if not strongly_refuted(contradicting, cards_by_id,
-                                    author_counts):
-                problems.append(f"{cl}: overturned needs >=2 CONTRADICTING "
-                                "cards, or 1 with reliability >= "
-                                f"{OVERTURN_RELIABILITY_MIN} "
-                                f"(has {len(contradicting)} contradicting)")
-        elif fate == "abandoned":
-            if not ev and not f.get("timeline"):
-                problems.append(f"{cl}: abandoned needs evidence or a dated "
-                                "timeline entry")
-        else:
-            if not ev:
-                problems.append(f"{cl}: fate {fate!r} without evidence on disk")
-        detail_claims[cl] = {"fate": fate, "evidence_n": len(ev),
-                             "claim_checks": checks}
-
-    detail = {"claims": detail_claims, "fates_file_present": bool(fates),
-              "problems": problems[:12]}
-    return not problems, detail
+    generations = sorted(x for x in (os.listdir(descent_dir)
+                                     if os.path.isdir(descent_dir) else [])
+                         if x.startswith("generation_"))
+    return not problems, {"subject_card": subject.get("card_id"),
+                          "generation_1_rows": len(gen1),
+                          "triaged_fraction": round(triaged_frac, 3),
+                          "generations_present": generations,
+                          "descent_queries": n, "problems": problems}
 
 
-def resolution_coverage(root, cards_by_id, mode_doc):
-    """§23.5 — memory proposes the resolution; only retrieval keeps it.
-
-    Every sense confirmed by retrieved uses, every alias actually searched,
-    the origin on disk with a date. An unresolved concept fails closed."""
+def concept_resolution(root, cards_by_id, mode_doc):
+    """§23.5 — senses confirmed by retrieved uses, origin on disk, and a
+    mapped neighborhood. Counting only: whether a card genuinely USES a
+    sense is a judgment the fidelity audit makes, not this gate."""
     problems = []
     res, rp = read_json_object(os.path.join(root, "state",
                                             "concept_resolution.json"))
     problems.extend(rp)
     if not res and not problems:
         problems.append("state/concept_resolution.json not written (P0)")
-    queries = [str(q.get("query") or "").lower()
-               for q in read_jsonl(os.path.join(root, "state",
-                                                "seen_queries.jsonl"))]
-    senses = res.get("senses") or []
-    if res and not senses:
-        problems.append("no senses recorded — what does the term denote?")
-    for s in senses:
+
+    senses = res.get("senses")
+    if senses is not None and not isinstance(senses, list):
+        problems.append("concept_resolution.senses is not a list")
+        senses = []
+    for s in senses or []:
+        s = as_dict(s, "concept_resolution.senses[]", problems)
         sid = s.get("id", "?")
-        confirmed = []
-        for c in s.get("confirmed_by") or []:
-            if c in cards_by_id:
-                confirmed.append(c)
-            else:
+        confirmed = [c for c in as_id_list(s.get("confirmed_by"),
+                                           f"sense {sid} confirmed_by",
+                                           problems) if c in cards_by_id]
+        for c in as_id_list(s.get("confirmed_by"), f"sense {sid}", []):
+            if c not in cards_by_id:
                 problems.append(f"sense {sid}: confirming card {c!r} not "
                                 "on disk")
         if len(confirmed) < SENSE_CONFIRM_MIN:
             problems.append(f"sense {sid}: {len(confirmed)} confirming cards "
                             f"on disk (need {SENSE_CONFIRM_MIN})")
-    for alias in as_id_list(res.get("aliases"), "aliases", problems):
-        pat = term_pattern(alias)
-        n = sum(1 for q in queries if pat and pat.search(q))
-        if n < ALIAS_QUERIES_MIN:
-            problems.append(f"alias {alias!r} in {n} logged queries "
-                            f"(need {ALIAS_QUERIES_MIN})")
-    origin = (res.get("origin") or {}).get("earliest_known") or {}
+    if not senses:
+        problems.append("no senses recorded — what does the term denote?")
+
+    origin = as_dict(as_dict(res.get("origin"), "origin", problems)
+                     .get("earliest_known"), "origin.earliest_known",
+                     problems)
     if not origin.get("node"):
         problems.append("origin.earliest_known.node not set")
     elif origin["node"] not in cards_by_id:
         problems.append(f"origin node {origin['node']!r} not on disk")
     elif not origin.get("date"):
-        problems.append("origin.earliest_known.date missing — priority "
-                        "cannot be judged")
-    detail = {"senses": len(senses), "aliases": len(res.get("aliases") or []),
-              "origin": origin.get("node"), "problems": problems[:10]}
-    return not problems, detail
+        problems.append("origin.earliest_known.date missing")
 
-
-def neighborhood_coverage(root, cards_by_id, mode_doc):
-    """§23.5 — a concept is only understood relative to its alternatives."""
-    problems = []
-    res, rp = read_json_object(os.path.join(root, "state",
-                                            "concept_resolution.json"))
-    problems.extend(rp)
-    sibs = res.get("siblings") or []
-    queries = [str(q.get("query") or "").lower()
-               for q in read_jsonl(os.path.join(root, "state",
-                                                "seen_queries.jsonl"))]
+    sibs = res.get("siblings")
+    if sibs is not None and not isinstance(sibs, list):
+        problems.append("concept_resolution.siblings is not a list")
+        sibs = []
+    sibs = sibs or []
     if not sibs:
-        just = (res.get("siblings_none_justification") or "").strip()
+        just = str(res.get("siblings_none_justification") or "").strip()
         if len(just) < 30:
             problems.append("no siblings and no substantive "
-                            "siblings_none_justification — a concept with no "
-                            "neighborhood is rare enough to argue for")
+                            "siblings_none_justification")
     elif len(sibs) < SIBLINGS_MIN:
         problems.append(f"{len(sibs)} sibling(s) mapped "
                         f"(need {SIBLINGS_MIN}, or a justification)")
     for s in sibs:
+        s = as_dict(s, "concept_resolution.siblings[]", problems)
         name = s.get("name")
         if not isinstance(name, str) or not name.strip():
             problems.append(f"sibling entry has no usable name: {s!r}")
             continue
-        cards = []
-        for c in s.get("cards") or []:
-            if c in cards_by_id:
-                cards.append(c)
-            else:
-                problems.append(f"sibling {name!r}: card {c!r} not on disk")
+        cards = [c for c in as_id_list(s.get("cards"), f"sibling {name}",
+                                       problems) if c in cards_by_id]
         if len(cards) < SIBLING_CARDS_MIN:
             problems.append(f"sibling {name!r}: {len(cards)} digested cards "
                             f"on disk (need {SIBLING_CARDS_MIN})")
-        pat = term_pattern(name)
-        n = sum(1 for q in queries if pat and pat.search(q))
-        if n < ALIAS_QUERIES_MIN:
-            problems.append(f"sibling {name!r} in {n} logged queries "
-                            f"(need {ALIAS_QUERIES_MIN})")
-    detail = {"siblings": [s.get("name") for s in sibs],
-              "problems": problems[:10]}
-    return not problems, detail
-
-
-def property_coverage(root, cards_by_id, mode_doc, author_counts):
-    """§23.5 — what the name's reputation rests on, graded not assumed.
-
-    `folklore` carries proof of search; `replicated` requires disjoint author
-    groups (popularity is never evidence — banned behavior 48)."""
-    problems = []
-    facets = as_id_list(mode_doc.get("facets"), "mode.json facets", problems)
-    ev_doc, ep = read_json_object(os.path.join(root, "state",
-                                               "property_evidence.json"))
-    problems.extend(ep)
-    if not facets:
-        problems.append("mode.json facets is empty; fill it after P0")
-
-    per_tag, untagged, qp = role_target_checks(root, "property_check")
-    problems.extend(qp)
-    problems.extend(orphan_tag_problems(per_tag, facets, "property_check"))
-
-    detail_facets = {}
-    for fid in facets:
-        rec = as_dict(ev_doc.get(fid), f"property_evidence.json[{fid}]",
-                      problems)
-        status = rec.get("status")
-        ev = evidence_on_disk(rec.get("evidence"), cards_by_id, fid,
-                              "evidence", problems)
-        confirming = [e for e in ev if e.get("relation") != "contradicts"]
-        contradicting = [e for e in ev if e.get("relation") == "contradicts"]
-        checks = count_checks(per_tag, untagged, fid)
-        if not status:
-            problems.append(f"{fid}: no status in property_evidence.json")
-        elif status not in PROPERTY_STATUSES:
-            problems.append(f"{fid}: status {status!r} not in the §23.5 "
-                            "taxonomy")
-        elif status == "replicated":
-            groups = [card_authors(cards_by_id.get(e["node"]))
-                      for e in confirming]
-            if max_disjoint_groups(groups) < 2:
-                problems.append(f"{fid}: replicated needs >=2 confirming "
-                                "cards with disjoint author lists")
-        elif status == "demonstrated":
-            if not confirming:
-                problems.append(f"{fid}: demonstrated without a confirming "
-                                "card on disk")
-        elif status == "contested":
-            if not contradicting:
-                problems.append(f"{fid}: contested without a contradicting "
-                                "card on disk")
-        elif status == "refuted":
-            if not strongly_refuted(contradicting, cards_by_id, author_counts):
-                problems.append(f"{fid}: refuted needs >=2 contradicting "
-                                "cards or 1 at reliability >= "
-                                f"{OVERTURN_RELIABILITY_MIN}")
-        elif status == "folklore":
-            if checks < PROPERTY_CHECK_QUERIES_MIN:
-                problems.append(f"{fid}: folklore with {checks} distinct "
-                                "property_check queries (need "
-                                f"{PROPERTY_CHECK_QUERIES_MIN})")
-        detail_facets[fid] = {"status": status, "evidence_n": len(ev),
-                              "checks": checks}
-    detail = {"facets": detail_facets, "problems": problems[:12]}
-    return not problems, detail
-
-
-def solution_coverage(root, cards_by_id, mode_doc, author_counts, components):
-    """§23.6 — every requirement covered or declared unsolved with proof of
-    search; every solution's validity backed by evidence on disk; adoption
-    numbers cross-checked, never taken on the agent's word.
-
-    Validity and adoption are separate axes by design (banned behavior 49).
-    Validity independence is computed from confirmations+reuses; the
-    adoption ceiling additionally counts the `adopters` evidence list, so
-    'popular but unvalidated' — the mode's headline case — is recordable."""
-    problems = []
-    reqs = as_id_list(mode_doc.get("requirements"),
-                      "mode.json requirements", problems)
-    doc, dp = read_json_object(os.path.join(root, "state", "solutions.json"))
-    problems.extend(dp)
-    sols = as_dict(doc.get("solutions"), "solutions.json solutions", problems)
-    unsolved = as_id_list(doc.get("unsolved_requirements"),
-                          "unsolved_requirements", problems)
-    if not reqs:
-        problems.append("mode.json requirements is empty; fill it after P0")
-    if not sols:
-        problems.append("state/solutions.json has no solutions recorded")
-    if reqs and set(reqs) != set(components):
-        only_mode = sorted(set(reqs) - set(components))
-        only_graph = sorted(set(components) - set(reqs))
-        problems.append("mode.json requirements and graph.meta.components "
-                        f"differ -- only in mode.json: {only_mode}; only in "
-                        f"graph: {only_graph}. They are the same list (§23.6); "
-                        "a requirement missing from the graph escapes the "
-                        "corpus floors.")
-
-    per_tag, untagged, qp = role_target_checks(root, "solution_check")
-    problems.extend(qp)
-
-    def indep_of(own, evidence):
-        """Independent groups among evidence: pairwise-disjoint author sets,
-        disjoint from `own`. Fail-closed on an unknown `own` — an authorless
-        defining card cannot establish independence, so it grants none."""
-        if not own:
-            return 0
-        return max_disjoint_groups(
-            [g for g in (card_authors(cards_by_id.get(e.get("node")))
-                         for e in evidence) if g and not (g & own)])
-
-    covered = set()
-    detail_sols = {}
-    for sid, s in sols.items():
-        s = as_dict(s, f"solutions.json[{sid}]", problems)
-        node = s.get("node")
-        own = card_authors(cards_by_id.get(node))
-        authors_known = bool(own)
-        if node not in cards_by_id:
-            problems.append(f"{sid}: defining node {node!r} not on disk")
-        elif not authors_known:
-            problems.append(f"{sid}: defining node {node!r} has no "
-                            "bib.authors -- independence cannot be "
-                            "established; record the authors or maintainers")
-        for r, level in as_dict(s.get("covers"), f"{sid} covers",
-                                problems).items():
-            if r not in reqs:
-                problems.append(f"{sid}: covers key {r!r} is not a declared "
-                                "requirement in mode.json")
-            elif level not in ("full", "partial", "none"):
-                problems.append(f"{sid}: covers[{r}]={level!r} is not "
-                                "full|partial|none")
-            elif level in ("full", "partial"):
-                covered.add(r)
-        v = as_dict(s.get("validity"), f"{sid} validity", problems)
-        status = v.get("status")
-        conf = evidence_on_disk(v.get("confirmations"), cards_by_id, sid,
-                                "confirmation", problems)
-        reuse = evidence_on_disk(v.get("reuses"), cards_by_id, sid,
-                                 "reuse", problems)
-        refs = evidence_on_disk(v.get("refutations"), cards_by_id, sid,
-                                "refutation", problems)
-        support = conf + reuse
-        indep = indep_of(own, support)
-        if not status:
-            problems.append(f"{sid}: no validity.status recorded")
-        elif status not in SOLUTION_STATUSES:
-            problems.append(f"{sid}: status {status!r} not in the §23.6 "
-                            "taxonomy")
-        elif status == "proven":
-            if authors_known and indep < PROVEN_INDEPENDENT_GROUPS_MIN:
-                problems.append(f"{sid}: proven needs "
-                                f">={PROVEN_INDEPENDENT_GROUPS_MIN} "
-                                f"independent groups (computed {indep})")
-        elif status == "promising":
-            if not support:
-                problems.append(f"{sid}: promising without a confirming card "
-                                "on disk")
-        elif status == "contested":
-            if not support or not refs:
-                problems.append(f"{sid}: contested needs both confirming and "
-                                "refuting cards on disk")
-        elif status == "failed":
-            if not strongly_refuted(refs, cards_by_id, author_counts):
-                problems.append(f"{sid}: failed needs >=2 refuting cards or "
-                                "1 at reliability >= "
-                                f"{OVERTURN_RELIABILITY_MIN}")
-        elif status == "unvalidated":
-            checks = count_checks(per_tag, untagged, sid,
-                                  names=(s.get("name"),))
-            if checks < SOLUTION_CHECK_QUERIES_MIN:
-                problems.append(f"{sid}: unvalidated with {checks} distinct "
-                                "solution_check queries (need "
-                                f"{SOLUTION_CHECK_QUERIES_MIN})")
-        adoption = as_dict(s.get("adoption"), f"{sid} adoption", problems)
-        adopters = evidence_on_disk(adoption.get("adopters"), cards_by_id,
-                                    sid, "adopter", problems)
-        adoption_ceiling = (indep_of(own, support + adopters) if adopters
-                            else indep)
-        # Fail-closed: both axes are explicit (§23.6). An unrecorded or
-        # unusable adoption count is not a passing one — zero is honest.
-        rec = as_count(adoption.get("adopter_groups"),
-                       f"{sid}: adoption.adopter_groups (both axes must be "
-                       "explicit; 0 is honest, §23.6)", problems)
-        if rec is not None and authors_known and rec > adoption_ceiling:
-            problems.append(f"{sid}: adopter_groups={rec} overstates the "
-                            f"{adoption_ceiling} independent groups "
-                            "computable from evidence on disk (add the "
-                            "adopting works to adoption.adopters)")
-        org = as_dict(adoption.get("org_backing"),
-                      f"{sid} org_backing", problems)
-        if org.get("active") and org.get("evidence_node") not in cards_by_id:
-            problems.append(f"{sid}: org_backing.active without an evidence "
-                            "node on disk -- backing is behavior, not brand")
-        detail_sols[sid] = {"status": status, "independent_groups": indep,
-                            "adoption_ceiling": adoption_ceiling,
-                            "refutations": len(refs)}
-
-    for r in unsolved:
-        if r not in reqs:
-            problems.append(f"unsolved entry {r!r} is not a declared "
-                            "requirement in mode.json -- typo or phantom")
-    for r in reqs:
-        if r in covered and r in unsolved:
-            problems.append(f"{r}: both covered by a solution and declared "
-                            "unsolved -- pick one")
-        elif r not in covered and r not in unsolved:
-            problems.append(f"{r}: no solution covers it and it is not "
-                            "declared unsolved")
-        elif r in unsolved:
-            checks = count_checks(per_tag, untagged, r)
-            if checks < SOLUTION_CHECK_QUERIES_MIN:
-                problems.append(f"{r}: unsolved with {checks} distinct "
-                                "solution_check queries (need "
-                                f"{SOLUTION_CHECK_QUERIES_MIN})")
-
-    problems.extend(orphan_tag_problems(per_tag, list(sols) + reqs,
-                                        "solution_check"))
-    shown = cap(problems, 30, "problems")
-    detail = {"solutions": detail_sols, "unsolved": unsolved,
-              "requirements_covered": sorted(covered & set(reqs)),
-              "problems": shown}
-    return not problems, detail
-
-
-def anchor_coverage(root, cards_by_id, mode_doc):
-    """§23.2 — the run cannot pass gates while the anchor is undigested or
-    its citation neighborhood unswept."""
-    anchor = mode_doc.get("anchor") or {}
-    card_id = anchor.get("card_id")
-    n_queries = distinct_role_queries(root, "anchor_forward")
-    problems = []
-    if not card_id:
-        problems.append("anchor.card_id not set in state/mode.json")
-    else:
-        card = cards_by_id.get(card_id)
-        if card is None:
-            problems.append(f"no card on disk for anchor {card_id!r}")
-        elif (card.get("provenance") or {}).get("depth") != "full_text":
-            problems.append(f"anchor card {card_id!r} is not full_text depth")
-    if n_queries < ANCHOR_QUERIES_MIN:
-        problems.append(f"{n_queries} distinct role:\"anchor_forward\" queries "
-                        f"logged (need {ANCHOR_QUERIES_MIN})")
-    detail = {"card_id": card_id, "anchor_forward_queries": n_queries,
-              "problems": problems}
-    return not problems, detail
+    return not problems, {"senses": len(senses or []),
+                          "siblings": [as_dict(s, "s", []).get("name")
+                                       for s in sibs],
+                          "origin": origin.get("node"),
+                          "problems": cap(problems, 20, "problems")}
 
 
 def ledger_streaks(ledger, key, predicate):
@@ -1340,8 +1101,12 @@ def main():
     mode, mode_doc, mode_problem = load_mode(root)
     if mode_problem:
         print(f"[graph_metrics] WARNING: {mode_problem}", file=sys.stderr)
-    floors = mode_doc.get("floors") or {}
-    delta_components = mode_doc.get("delta_components") or []
+    mode_field_problems = []
+    floors = as_dict(mode_doc.get("floors"), "mode.json floors",
+                     mode_field_problems)
+    delta_components = as_id_list(mode_doc.get("delta_components"),
+                                  "mode.json delta_components",
+                                  mode_field_problems)
     if mode == "incremental":
         min_rounds_thr = floors.get("min_rounds", 6)
         min_digested_thr = floors.get("min_delta_digested", 75)
@@ -1355,7 +1120,6 @@ def main():
 
     components = graph.get("meta", {}).get("components", [])
     cards_by_id = {c.get("id"): c for c in cards if c.get("id")}
-    author_counts = author_presence_counts(cards)
     full_text = [c for c in cards
                  if c.get("provenance", {}).get("depth") == "full_text"]
     if mode == "incremental":
@@ -1442,16 +1206,9 @@ def main():
         "validator":          {"value": "run validate_graph.py separately",
                                "threshold": 0, "pass": False},
     }
-    # §12.1 fail-closed: state the gates read must be readable. A corrupt
-    # mode declaration or an unparseable log row means the metrics describe
-    # something other than what the operator thinks they describe.
-    state_problems = ([mode_problem] if mode_problem else []) + jsonl_problems()
-    if state_problems:
-        gates["state_readable"] = {"value": state_problems[:6],
-                                   "threshold": "mode.json valid; every log "
-                                                "row an object",
-                                   "pass": False}
-    # §23 mode gates — present only in their mode, fail-closed like the rest.
+    # §23 mode gates — present only in their mode, fail-closed like the
+    # rest. Every mode with per-target records runs the SAME kernel; the
+    # extras below are presence counts, not judgments.
     if mode == "incremental":
         rs_ok, rs_detail = refresh_sweep(root)
         gates["refresh_sweep"] = {"value": rs_detail,
@@ -1478,40 +1235,43 @@ def main():
                                                   f"triaged >={DESCENT_TRIAGE_MIN:.0%} + "
                                                   f">={DESCENT_QUERIES_MIN} descent queries",
                                      "pass": dc_ok}
-        cc_ok, cc_detail = claim_coverage(root, cards_by_id, mode_doc,
-                                          author_counts)
-        gates["claim_coverage"] = {"value": cc_detail,
-                                   "threshold": "every claim: evidence-backed "
-                                                "fate per §23.4 minimums",
-                                   "pass": cc_ok}
     elif mode == "concept":
-        rs_ok, rs_detail = resolution_coverage(root, cards_by_id, mode_doc)
+        cr_ok, cr_detail = concept_resolution(root, cards_by_id, mode_doc)
         gates["resolution_coverage"] = {
-            "value": rs_detail,
-            "threshold": f"every sense >={SENSE_CONFIRM_MIN} cards, every "
-                         f"alias >={ALIAS_QUERIES_MIN} queries, origin on disk",
-            "pass": rs_ok}
-        nb_ok, nb_detail = neighborhood_coverage(root, cards_by_id, mode_doc)
-        gates["neighborhood_coverage"] = {
-            "value": nb_detail,
-            "threshold": f">={SIBLINGS_MIN} siblings x "
-                         f">={SIBLING_CARDS_MIN} cards, or justified absence",
-            "pass": nb_ok}
-        pc_ok, pc_detail = property_coverage(root, cards_by_id, mode_doc,
-                                             author_counts)
-        gates["property_coverage"] = {
-            "value": pc_detail,
-            "threshold": "every facet: graded status per §23.5 minimums",
-            "pass": pc_ok}
+            "value": cr_detail,
+            "threshold": f"every sense >={SENSE_CONFIRM_MIN} cards on disk, "
+                         f"origin on disk, >={SIBLINGS_MIN} siblings x "
+                         f">={SIBLING_CARDS_MIN} cards (or justified absence)",
+            "pass": cr_ok}
     elif mode == "problem":
-        sc_ok, sc_detail = solution_coverage(root, cards_by_id, mode_doc,
-                                             author_counts, components)
-        gates["solution_coverage"] = {
-            "value": sc_detail,
+        rq_ok, rq_detail = requirement_coverage(root, mode_doc, cards_by_id,
+                                                components)
+        gates["requirement_coverage"] = {
+            "value": rq_detail,
             "threshold": "every requirement covered or unsolved-with-proof; "
-                         "every status per §23.6 minimums; adoption "
-                         "cross-checked",
-            "pass": sc_ok}
+                         "requirements == graph.meta.components",
+            "pass": rq_ok}
+
+    spec = TARGET_GATES.get(mode)
+    if spec:
+        tc_ok, tc_detail = target_coverage(root, cards_by_id, mode_doc, spec)
+        gates[spec["gate"]] = {
+            "value": tc_detail,
+            "threshold": f"every target: a {spec['section']} status, evidence "
+                         "on disk, and proof of search for a nothing-found "
+                         "verdict",
+            "pass": tc_ok}
+    # §12.1 fail-closed: state the gates read must be readable. Computed
+    # LAST, because the mode gates above open logs and card files this pass
+    # is meant to cover — computing it earlier made it fail open.
+    state_problems = (([mode_problem] if mode_problem else [])
+                      + mode_field_problems + jsonl_problems()
+                      + card_problems())
+    if state_problems:
+        gates["state_readable"] = {"value": state_problems[:8],
+                                   "threshold": "mode.json valid; every log "
+                                                "row and card an object",
+                                   "pass": False}
     all_pass = all(gate["pass"] for gate in gates.values())
 
     # --- guidance: the failing gate drives next round's assignment mix (§12)
@@ -1552,18 +1312,12 @@ def main():
         guidance.append({"gate": "anchor_coverage",
                          "action": "sweep_anchor_forward_citations",
                          "targets": gates["anchor_coverage"]["value"]["problems"][:4]})
-    if "descent_coverage" in gates and not gates["descent_coverage"]["pass"]:
-        guidance.append({"gate": "descent_coverage",
-                         "action": "triage_descent_generation",
-                         "targets": gates["descent_coverage"]["value"]["problems"][:4]})
-    if "claim_coverage" in gates and not gates["claim_coverage"]["pass"]:
-        guidance.append({"gate": "claim_coverage",
-                         "action": "adjudicate_claim_fates",
-                         "targets": gates["claim_coverage"]["value"]["problems"][:4]})
     for cg, action in (("resolution_coverage", "confirm_concept_resolution"),
-                       ("neighborhood_coverage", "digest_sibling_concepts"),
                        ("property_coverage", "grade_property_evidence"),
-                       ("solution_coverage", "adjudicate_solutions")):
+                       ("solution_coverage", "adjudicate_solutions"),
+                       ("requirement_coverage", "cover_or_declare_unsolved"),
+                       ("claim_coverage", "adjudicate_claim_fates"),
+                       ("descent_coverage", "triage_descent_generation")):
         if cg in gates and not gates[cg]["pass"]:
             guidance.append({"gate": cg, "action": action,
                              "targets": gates[cg]["value"]["problems"][:4]})
@@ -1580,7 +1334,7 @@ def main():
         "computed": datetime.now(timezone.utc).isoformat(),
         "gates": gates,
         "mode_problem": mode_problem,
-        "malformed_log_rows": jsonl_problems(),
+        "malformed_state": state_problems[:8],
         "all_pass": all_pass,
         "report_unlocked": False,          # requires validator exit 0 as well
         "next_round_guidance": guidance,

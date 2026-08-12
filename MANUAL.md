@@ -690,7 +690,9 @@ Opportunities are typed. An untyped "this seems promising" is rejected at merge.
   "statement": "<one precise sentence a researcher could act on>",
   "why_now": "<the specific thing that changed. No why_now, no record.>",
   "evidence": [{"nodes": ["a", "b"], "what_it_shows": "...",
-                "anchor": "<=15 words", "section": "5.1"}],
+                "anchor": "<=15 words", "section": "5.1",
+                "clusters": ["<cluster ids this evidence speaks for>"]}],
+  "cluster": "<the cluster this opportunity evaluates, if it is about one>",
   "supporting_future_work": [{"node": "...", "stated_limitation": "..."}],
   "distance_from_idea": "extends|adjacent|pivot|unrelated",
   "reuses_from_idea": ["<which of the operator's components still apply>"],
@@ -735,11 +737,11 @@ Compute mechanically each round into `state/round_XX/gate.json`. Do not assert t
 | `opportunity_coverage` | §11.5: clusters evaluated, holes classified, ≥8 opportunities with searched falsifiers across ≥4 types, ≥2 `extends` | all |
 | `card_fidelity` | §12.2 spot-audit agreement rate over the last 3 rounds | ≥ 0.85 |
 | `validator` | `scripts/validate_graph.py` exit code | 0 |
-| `state_readable` | `state/mode.json` parses and declares a valid mode; every row in the JSONL logs the gates read is an object | no problems |
+| `state_readable` | `state/mode.json` parses and declares a valid mode; every JSONL row and every corpus card the gates read is an object | no problems |
 
 **`state_readable` appears only when something is wrong**, and it fails closed for the reason §12.1 gives: a metric computed from state you cannot read is not a metric. A corrupt `mode.json` in particular would otherwise let a §23 run be gated as `fresh` with every mode gate silently absent.
 
-Opportunity records are held to the same evidence rule as cards: `opportunity_coverage` fails if any `evidence[].nodes` entry names a node that is not in the corpus, or if a record's evidence is not shaped as §11.4 specifies. A fabricated citation in `opportunities.jsonl` reaches report §7 as readily as one in a card.
+Opportunity records are held to the same evidence rule as cards: `opportunity_coverage` fails if any `evidence[].nodes` entry names a node that is not in the corpus, or if a record's evidence is not shaped as §11.4 specifies. A fabricated citation in `opportunities.jsonl` reaches report §7 as readily as one in a card. **The cluster-coverage half of that gate reads `cluster` and `evidence[].clusters`** — the fields §11.4 now shows; a record that names neither cannot mark any cluster evaluated, which is why the schema carries them.
 
 ### 12.0 Log schemas — the gates read these, so they are load-bearing
 
@@ -815,7 +817,11 @@ Three of these gates were, in v1.1, satisfiable by doing *less* work. They are n
 
 **Fail-closed:** a metric that cannot be computed counts as failed. **All twelve must pass.** If any fails, the loop continues — and the failing metric determines the next round's assignment mix.
 
-**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors; in concept runs `resolution_coverage`, `neighborhood_coverage`, and `property_coverage` gates are added at full fresh floors; in problem runs a `solution_coverage` gate is added at full fresh floors. The values are in §23.1, §23.4, §23.5, and §23.6, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
+**How the §23 mode gates work.** Every mode with per-target records — retrospective claims, concept facets, problem solutions — runs the *same* kernel, which checks four things and nothing more: the record file parses as an object; every declared target carries a status from that mode's set; every evidence node the record cites exists in the corpus (§1.4); and a "nothing found" status (`ignored`, `folklore`, `unvalidated`) carries its proof-of-search floor while every other status carries at least one on-disk evidence node. Everything else a mode needs is a presence count: is the anchor digested, were the generation-1 citers triaged, was the refresh sweep completed.
+
+**What the gates deliberately do not compute.** Earlier versions scored independence over author sets, adoption ceilings, reliability-weighted corroboration, and per-alias query coverage. Those were judgments dressed as arithmetic, and they failed in both directions — passing self-confirmation, failing honest work. They are gone. Judgment about evidence quality belongs to the red team, the §12.2 fidelity audit, and the operator reading the report; the scripts keep the books. See `docs/AUDIT.md` for the history that produced this rule.
+
+**Mode scaling (§23):** in incremental runs, `min_rounds`, `min_digested`, `strategy_exhaustion`, and the prospector start rescale to the delta scope, and a `refresh_sweep` gate is added; in anchored runs an `anchor_coverage` gate is added; in retrospective runs `descent_coverage` and `claim_coverage` gates are added at full fresh floors; in concept runs `resolution_coverage` and `property_coverage` gates are added at full fresh floors; in problem runs `requirement_coverage` and `solution_coverage` are added at full fresh floors. The values are in §23.1, §23.4, §23.5, and §23.6, computed from `state/mode.json` by `graph_metrics.py`. Fail-closed and every §12.1 proof-of-work definition apply unchanged in all modes.
 
 ---
 
@@ -1361,7 +1367,8 @@ Two failures deserve naming because they look like opposites and are the same mi
 - [ ] The anti-report (§10) is written
 - [ ] No claim anywhere traces to memory rather than a retrieved artifact
 - [ ] `state/anomalies.jsonl` reviewed; recurring steering attempts noted in §8
-- [ ] §23 mode obligations met — incremental: `refresh_sweep` gate passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` gate passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` gates passed, §0 scoreboard carries every claim, load-bearing fates triple-passed; concept: all three §23.5 gates passed, disambiguation present when senses > 1, origin and reading path present, nothing above `demonstrated` without disjoint-author replication; problem: `solution_coverage` gate passed, §0 carries the ranked recommendation with both axes, every requirement covered or headline-unsolved, failure museum present
+- [ ] §23 mode obligations met — incremental: `refresh_sweep` passed, impact-evidence subsection present, inherited opportunities re-validated before reopening; anchored: `anchor_coverage` passed, anchor-solidity subsection present; retrospective: `descent_coverage` and `claim_coverage` passed, §0 scoreboard carries every claim, load-bearing fates triple-passed; concept: `resolution_coverage` and `property_coverage` passed, disambiguation present when senses > 1, origin and reading path present; problem: `solution_coverage` and `requirement_coverage` passed, §0 carries the ranked recommendation with both axes, every requirement covered or headline-unsolved, failure museum present
+- [ ] Every judgment the gates deliberately do not compute — independence of confirmations, reality of adoption, strength of contradicting evidence — is stated in the report and was attacked by the red team, not left implied by a passing gate
 - [ ] The §23.0 mode sanity check ran before P0 and `mode_check: ok` is in the ledger — or the mismatch was surfaced and resolved by the operator, never worked around
 
 ---
@@ -1485,7 +1492,7 @@ Affiliation and venue prestige may additionally order your *reading queue* — r
 |---|---|---|
 | `held` | Retested or independently confirmed, not merely repeated | ≥1 confirming card |
 | `disputed` | Contradicted; the dispute is live | ≥1 contradicting card |
-| `overturned` | Contradicted and the field's consensus moved | ≥2 cards carrying `relation: "contradicts"`, or 1 such card with reliability ≥ 0.75 |
+| `overturned` | Contradicted and the field's consensus moved | ≥2 contradicting cards, weighed by you — the gate checks that the evidence exists and is on disk, not that it is strong enough |
 | `developed` | Extended, strengthened, generalized | ≥1 `builds_on` card |
 | `varied` | Spawned distinct variants of the mechanism | ≥1 variant card |
 | `repurposed` | Carried to a problem the subject never intended | ≥1 card applying it elsewhere |
@@ -1497,8 +1504,9 @@ Affiliation and venue prestige may additionally order your *reading queue* — r
   "timeline": [{"year": 2019, "event": "confirmed at small scale", "node": "x2019y"},
                {"year": 2022, "event": "failed to replicate at scale", "node": "z2022w"}],
   "evidence": [{"node": "z2022w", "relation": "contradicts", "anchor": "<=15 words"}],
-  // `relation` is load-bearing, not decorative: the fate minimums above count
-  // only entries whose relation says what the card does to the claim.
+  // `relation` states what the card does to the claim. Fill it on every
+  // entry: the report and the red team read it, and it is what makes a
+  // fate auditable by a human.
   "independent_lineage": ["nodes that developed this without citing the subject"],
   "note": "<one sentence a reader can act on>"}}
 ```
@@ -1542,7 +1550,7 @@ Everything in P0 starts as memory-generated hypothesis (§1.4 permits exactly th
 
 | Status | Meaning | Minimum evidence |
 |---|---|---|
-| `replicated` | Shown by ≥2 groups with **disjoint author lists** | ≥2 confirming cards, authors disjoint |
+| `replicated` | Shown by ≥2 groups with **disjoint author lists** — you verify the disjointness and say so | ≥2 confirming cards on disk |
 | `demonstrated` | Shown once, not independently reproduced | ≥1 confirming card |
 | `contested` | Confirming and contradicting evidence both live | ≥1 contradicting card |
 | `refuted` | The weight of evidence is against it | ≥2 contradicting cards, or 1 at reliability ≥ 0.75 |
@@ -1552,7 +1560,7 @@ Everything in P0 starts as memory-generated hypothesis (§1.4 permits exactly th
 
 **The red team's mandate inverts to deflation.** Same slots, same `redteam_null` mechanics; the objective becomes: *prove the concept is less than its name suggests.* Find the older coinage (every §6 historical strategy, adjacent-field translation, pre-2015 sweeps); find the identical mechanism under a different name (`reinvents` entity resolution, §9.1); find the failed replications and negative results; find the sense conflation nobody noticed. `threat_level` reads as "deflation evidence"; `which_component` is the sense or facet ID. A concept that survives two verified-null deflation rounds is a concept whose consolidation you can sign.
 
-**Gates.** All §12 gates with facets as components, plus three mode gates, fail-closed: `resolution_coverage` — every sense confirmed by ≥2 cards on disk, every alias appearing in ≥2 logged queries, origin node on disk with a date; `neighborhood_coverage` — ≥2 siblings each backed by ≥3 digested cards and ≥2 logged queries, or an explicit justification that the concept genuinely has none; `property_coverage` — every facet carries a status with its minimum evidence per the table. The prospector runs unchanged from round 8: where is this concept's frontier open, with `why_now` and searched falsifiers.
+**Gates.** All §12 gates with facets as components, plus two fail-closed mode gates. `resolution_coverage`: every sense confirmed by ≥2 cards on disk, the origin node on disk with a date, and ≥2 siblings each backed by ≥3 digested cards (or a substantive justification that the concept genuinely has none). `property_coverage` (the §23 kernel): every facet carries a status from the table, its cited nodes are on disk, and a `folklore` verdict carries its ≥5 searched queries. Whether a card genuinely *uses* a sense, and whether two confirmations are independent, are judgments for the fidelity audit and the red team — not gate arithmetic. The prospector runs unchanged from round 8: where is this concept's frontier open, with `why_now` and searched falsifiers.
 
 **The report.** §0 is the **orientation briefing** (≤600 words, no subsections): what this concept actually is in plain words; whether the name means one thing or several; how mature the evidence is — lead with anything `refuted` or `folklore`; the 3 papers to read first and why these; the strongest opening the frontier offers. §1 the resolution — definition(s), `### Disambiguation` when senses > 1, `### Origin` with the lineage and pre-name history; §2 property adjudication, one paragraph per facet with status and anchors; §3 the deflation case — the strongest argument the concept is less than it appears, and its rebuttal or concession; §4 current frontier and who drives it; §5 the neighborhood map, one subsection per sibling; §6 evolution — how the concept and its names moved through eras; §7 gains `### Reading path`: foundations → canonical → current frontier, each entry one line on why it earns its place; §8–§10 as in §15.3. The sealed file holds papers the operator has *heard associated* with the term — misses lower confidence per §13.2, and are unusually diagnostic here: if the operator heard of it and twelve rounds didn't surface it, the alias net has a hole.
 
@@ -1586,7 +1594,7 @@ The operator supplies a **problem** and no solution. The run's job: map the solu
 
 | Status | Meaning | Minimum evidence |
 |---|---|---|
-| `proven` | Independently confirmed or reused by others | ≥2 confirmation/reuse cards from groups disjoint from the authors and from each other |
+| `proven` | Independently confirmed or reused by others — you verify the independence and say so in `note` | ≥2 confirmation/reuse cards on disk |
 | `promising` | Demonstrated, possibly only by its authors | ≥1 confirming card |
 | `contested` | Works in some hands, fails in others | ≥1 confirming and ≥1 refuting card |
 | `failed` | The weight of evidence is against it | ≥2 refuting cards, or 1 at reliability ≥ 0.75 |
@@ -1594,12 +1602,14 @@ The operator supplies a **problem** and no solution. The run's job: map the solu
 
 **Reuse outranks citation.** A citation is free; building a later system *on top of* the technique is a bet with the citing group's own time. Weight `reuses` accordingly when ranking within a status, and never let raw citation counts promote a solution's validity status (banned behavior 48 applies here unchanged — popularity is an adoption signal, not evidence).
 
-**Adoption is measured by behavior, not brand.** `adopter_groups` is cross-checked against the evidence: the gate counts distinct author groups (pairwise disjoint, disjoint from the solution's own authors) among the confirmation, reuse, **and `adopters`** cards, and an agent-recorded integer above the computed one fails. The `adopters` list is how adoption is recorded *without* touching validity — a work that merely uses the solution goes there, not into `confirmations` — so "popular but unvalidated" is representable exactly as observed. **`adopter_groups` is required on every solution** — an integer, and 0 is honest; an unrecorded adoption axis is a gate failure, not a passing one, because both axes must be explicit for the divergence cases to be visible. A defining artifact with no recorded authors fails the gate outright: independence cannot be established from an unknown author set, and unknown must never be read as independent. `org_backing.active` requires a retrieved `evidence_node` — a recent release, a maintained repo, a follow-up publication — not the org's fame. There is no prestige list anywhere in this mode: an org backs a solution by *doing things*, and a solution from a famous lab that stopped maintaining it two years ago is an abandonment risk the report must say out loud. Constraint violations never remove a solution from the map — they are flagged in `constraint_violations` and cost it rank in §0, because the operator's constraints may change and the map should outlive them.
+**Adoption is measured by behavior, not brand.** The `adopters` list is how adoption is recorded *without* touching validity — a work that merely uses the solution goes there, not into `confirmations` — so "popular but unvalidated" is representable exactly as observed. `org_backing.active` means a retrieved artifact shows the org still working on it, never that the org is famous.
+
+**What the gate checks, and what it does not.** It checks that every cited node is on disk and that a claimed status carries evidence or a searched falsifier. It does **not** compute whether your confirmations are independent, whether adoption is real, or whether an org is genuinely maintaining anything — those are judgments, and a script computing them from author strings produces a number that looks like a guarantee and is not one. **Independence is your call and the red team's**: state it in the solution's `note`, defend it in report §2, and expect the red team to attack it. If two "independent" confirmations share an author, that is a finding for the failure museum, not a gate value. `org_backing.active` requires a retrieved `evidence_node` — a recent release, a maintained repo, a follow-up publication — not the org's fame. There is no prestige list anywhere in this mode: an org backs a solution by *doing things*, and a solution from a famous lab that stopped maintaining it two years ago is an abandonment risk the report must say out loud. Constraint violations never remove a solution from the map — they are flagged in `constraint_violations` and cost it rank in §0, because the operator's constraints may change and the map should outlive them.
 
 **Every requirement is covered or declared unsolved — nothing in between.** Each `R` must either have at least one solution with `covers: full|partial`, or appear in `unsolved_requirements` backed by proof of search (≥5 `role: "solution_check"` queries naming the requirement). An unsolved requirement is one of the most valuable findings this mode produces — it is where the operator's own contribution could live, and the prospector converts each one into a typed opportunity with `why_now` and a searched falsifier.
 
 **The red team's mandate inverts to failure hunting.** Same slots, same `redteam_null` mechanics; the objective: *break the recommendation.* Find "we tried X and it failed" reports, negative results, the limitation later work exposed, the deployment that quietly rolled it back, the solution family the map missed entirely. `threat_level` reads as "recommendation-changing evidence"; `which_component` is the requirement or solution ID. A ranking that survives two verified-null failure-hunting rounds is a ranking you can sign.
 
-**Gates.** All §12 gates with requirements as components, plus `solution_coverage`, fail-closed: registry present, `mode.json` `requirements` identical to `graph.meta.components` (they are one list; drift lets a requirement escape the corpus floors), every solution's defining node and evidence nodes on disk with status minimums met, `adopter_groups` not overstated, `org_backing.active` evidenced, every requirement covered or unsolved-with-proof, no requirement both covered and declared unsolved, and no `covers` key or `unsolved` entry naming a requirement that does not exist. The prospector runs unchanged from round 8, seeded by the unsolved requirements and the `contested` disputes.
+**Gates.** All §12 gates with requirements as components, plus two fail-closed mode gates. `solution_coverage` (the §23 kernel): every solution carries a status from the table, every cited node is on disk, and an `unvalidated` verdict carries its ≥5 searched queries. `requirement_coverage`: `mode.json` `requirements` identical to `graph.meta.components` (they are one list; drift lets a requirement escape the corpus floors), every requirement covered or declared unsolved with proof of search, none both, and no `covers` key or `unsolved` entry naming a requirement that does not exist. The prospector runs unchanged from round 8, seeded by the unsolved requirements and the `contested` disputes.
 
 **The report.** §0 is the **recommendation** (≤600 words, no subsections): a ranked table — solution, what it covers, validity, adoption, the one reason to pick or avoid it — then plain prose: "start with X; under constraint C, use Y instead"; if any requirement is unsolved, name its ID in §0 — each one is a headline, not a footnote, and the validator checks for the IDs, not the word. §1 the problem as decomposed, constraints marked; §2 per-solution adjudication — validity evidence, adoption evidence, both axes explicit; §3 the failure museum — what has been tried and abandoned, with the stated reasons, so the operator never reinvents a documented dead end; §4 who is actively working the problem now; §5 the solution-family map, one subsection per family; §6 how the solution space evolved — which families rose, which stalled, and why; §7 unsolved requirements and openings, each with `why_now`; §8–§10 as in §15.3. The sealed file holds solutions the operator has already heard of — a P4 miss means the solution net has a hole precisely where the operator's own information was better than the run's.

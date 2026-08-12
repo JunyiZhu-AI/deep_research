@@ -246,14 +246,14 @@ def id_present(needle, hay):
 
 
 def term_pattern(term):
-    """Case-insensitive, boundary-anchored, plural-tolerant matcher for a
-    natural-language term. Returns None for unusable input."""
+    """Boundary-anchored, plural-tolerant, case-insensitive matcher for a
+    natural-language term. Returns None for unusable input.
+
+    IGNORECASE is on the pattern rather than left to the caller: the whole
+    point of this module is that a caller cannot get the rule subtly wrong,
+    and "search a lowercased haystack" is exactly that kind of trap.
+    """
     if not isinstance(term, str) or not term.strip():
         return None
-    return re.compile(r"(?<![a-z0-9_])" + re.escape(term.strip().lower())
-                      + r"(?:e?s)?(?![a-z0-9_])")
-
-
-def term_present(term, text):
-    pat = term_pattern(term)
-    return bool(pat and pat.search(text.lower()))
+    return re.compile(r"(?<![a-zA-Z0-9_])" + re.escape(term.strip())
+                      + r"(?:e?s)?(?![a-zA-Z0-9_])", re.IGNORECASE)

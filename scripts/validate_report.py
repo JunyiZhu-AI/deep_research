@@ -133,15 +133,6 @@ except ImportError:
              "(init_run.py copies it into the run).")
 
 
-def load_json(path, default=None):
-    """Objects only; a corrupt or wrong-typed state file returns the default
-    AND is reported by the caller — never silently treated as absent."""
-    doc, problems = read_json_object(path)
-    if problems:
-        return default, problems
-    return (doc or default), []
-
-
 def check_readability(md, sections, d, mode="fresh"):
     # --- §16.3 the verdict page. Form rules (length, structure, sentences)
     # are universal. The recommendation-word and falsifier checks encode the
@@ -225,15 +216,15 @@ def _require_subsection(md, heading_re, where, kind, why, d):
 
 def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
     mode_doc = mode_doc or {}
-    graph = None
+    graph = {}
     for cand in (os.path.join(root, "out", "graph.json"),
                  os.path.join(root, "graph", "graph.json")):
         if os.path.exists(cand):
-            graph, gp = load_json(cand)
+            graph, gp = read_json_object(cand)
             for problem in gp:
                 d.add("graph_unreadable", cand, problem)
             break
-    if graph is None:
+    if not graph:
         d.add("no_graph", root, "cannot verify completeness without a graph")
         return
 
@@ -303,7 +294,7 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
               "scripts/recall_check.py (sealed file), --paste <file> "
               "(operator-held list), or --none (no list exists) (§0.1)")
     else:
-        rc, rcp = load_json(rc_path, {})
+        rc, rcp = read_json_object(rc_path)
         rc = rc or {}
         for problem in rcp:
             d.add("recall_check_unreadable", rc_path, problem)
@@ -365,8 +356,8 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
                             "reading_path_missing",
                             "concept runs must give the foundations → "
                             "canonical → frontier reading path (§23.5)", d)
-        res, resp = load_json(os.path.join(root, "state",
-                                           "concept_resolution.json"), {})
+        res, resp = read_json_object(os.path.join(root, "state",
+                                                  "concept_resolution.json"))
         for problem in resp:
             d.add("concept_resolution_unreadable", "state", problem)
         senses = (res or {}).get("senses") or []
@@ -381,11 +372,10 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
         # unsolved requirements are a headline, not a footnote; the failure
         # museum has a mechanical backstop like every other mode subsection.
         body = sections.get(0, ("", ""))[1]
-        sol_doc, solp = load_json(os.path.join(root, "state",
-                                               "solutions.json"), {})
+        sol_doc, solp = read_json_object(os.path.join(root, "state",
+                                                      "solutions.json"))
         for problem in solp:
             d.add("solutions_unreadable", "state/solutions.json", problem)
-        sol_doc = sol_doc if isinstance(sol_doc, dict) else {}
         # Ids must be usable strings: an empty or non-string key would make
         # every downstream match vacuously true.
         sol_ids = []

@@ -397,8 +397,24 @@ in it is load-bearing in a way an ordinary README's is not.
   disjoint-author test for `replicated` sees author strings only: the same
   group under different spellings, or serial collaborators publishing
   separately, both evade it.
-- **The validator layer is now ~2,300 lines whose only job is checking an
-  agent's bookkeeping, and that size is itself a risk.** Three review rounds
+- **The criterion below fired, and the gate layer was cut back.** A fourth
+  review round again found ~15 defects, four of them introduced by the third
+  round's fixes and four more in the very shape-validation class that round
+  claimed to close. Per the rule recorded here in advance, the response was
+  removal rather than another patch pass: the six bespoke mode gates (~690
+  lines) were replaced by one kernel checking four things — the record file
+  parses, each target has a valid status, every cited node is on disk, and a
+  nothing-found verdict carries its searched queries. Deleted outright:
+  independence scoring over author sets, adoption ceilings,
+  reliability-weighted corroboration, per-alias query coverage, and the
+  orphan-tag blocker. Those were judgments expressed as set arithmetic over
+  agent-written JSON; they failed in both directions (passing
+  self-confirmation, failing honest work), and every one of them is now the
+  red team's and the fidelity audit's job, stated in the report where a
+  human can argue with it. Whether *this* converges is still unmeasured —
+  but the surface that generated four rounds of defects is gone rather than
+  hardened.
+- **The historical note that produced that decision.** Three review rounds
   over the mode gates found 15 confirmed defects each, and roughly half of
   every round's findings were introduced by the previous round's fixes —
   hardening adds surface, and surface attracts bugs. The third round's

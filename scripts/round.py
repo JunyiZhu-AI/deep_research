@@ -160,13 +160,13 @@ def main():
     # displayed as active: showing it would tell the operator the §23 gates
     # are on when graph_metrics is running fresh.
     try:
-        from state_io import load_mode
+        from state_io import load_mode, as_dict
     except ImportError:
         print("[round] state_io.py must sit beside these scripts.",
               file=sys.stderr)
         return 2
     mode, mode_doc, mode_problem = load_mode(root)
-    floors = mode_doc.get("floors") or {}
+    floors = as_dict(mode_doc.get("floors"), "mode.json floors", [])
     prospector_start = (floors.get("prospector_start_round", 4)
                         if mode == "incremental" else 8)
 
