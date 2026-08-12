@@ -735,6 +735,11 @@ Compute mechanically each round into `state/round_XX/gate.json`. Do not assert t
 | `opportunity_coverage` | §11.5: clusters evaluated, holes classified, ≥8 opportunities with searched falsifiers across ≥4 types, ≥2 `extends` | all |
 | `card_fidelity` | §12.2 spot-audit agreement rate over the last 3 rounds | ≥ 0.85 |
 | `validator` | `scripts/validate_graph.py` exit code | 0 |
+| `state_readable` | `state/mode.json` parses and declares a valid mode; every row in the JSONL logs the gates read is an object | no problems |
+
+**`state_readable` appears only when something is wrong**, and it fails closed for the reason §12.1 gives: a metric computed from state you cannot read is not a metric. A corrupt `mode.json` in particular would otherwise let a §23 run be gated as `fresh` with every mode gate silently absent.
+
+Opportunity records are held to the same evidence rule as cards: `opportunity_coverage` fails if any `evidence[].nodes` entry names a node that is not in the corpus, or if a record's evidence is not shaped as §11.4 specifies. A fabricated citation in `opportunities.jsonl` reaches report §7 as readily as one in a card.
 
 ### 12.0 Log schemas — the gates read these, so they are load-bearing
 
@@ -754,7 +759,8 @@ counts as failed.** Write them as you go, not at the end of the round.
 
 - `round` and `strategy` are required, or the query is invisible to every gate.
 - `role` is what separates red-team searching from ordinary scouting. Without it the red team cannot prove it searched, and its rounds are **void**. The mode-specific roles (`refresh`, `anchor_forward`, `descent`, and the three `*_check` roles) feed the §23 mode gates.
-- `claim` tags a proof-of-search query with its target — a claim, facet, solution, or requirement ID (`CL3`, `F1`, `SOL-02`, `R4`), or a list of them for a query covering several. A query counts for a target when **tagged with it or when the query text names it** — tag when you search by alias or by problem description, which is exactly what good searching looks like.
+- `claim` tags a proof-of-search query with its target — a claim, facet, solution, or requirement ID (`CL3`, `F1`, `SOL-02`, `R4`), or a list of them for a query covering several. **Tag every check query.** The tag is your statement of what the search was for, and it is the only signal that survives an alias search: a query reading "does anyone evaluate speculative sampling independently" names no ID at all.
+- Counting is precise about this: a **tagged** query counts for the targets it names in the tag, and for nothing else — a query tagged `F2` does not credit `F1` because its text happens to contain "f1 score". An **untagged** query counts for any target whose ID or name appears in its text, since the text is then the only statement of intent available. Names match with plural tolerance ("gans" counts for alias "gan"); IDs match exactly. A tag naming no declared target is reported as a probable typo, because those queries credit nothing at all.
 - `query` must be the literal string — distinctness is computed from it, so near-duplicates padded to reach a count will be caught.
 - `new_relevant` is how many previously-unknown relevant items that single query surfaced.
 - `inapplicable: true` is the escape hatch for a strategy that genuinely cannot apply to this idea (e.g. patent search for a pure theory result). Use it honestly and rarely; it is logged and it appears in the report's methodology section.
@@ -1479,7 +1485,7 @@ Affiliation and venue prestige may additionally order your *reading queue* — r
 |---|---|---|
 | `held` | Retested or independently confirmed, not merely repeated | ≥1 confirming card |
 | `disputed` | Contradicted; the dispute is live | ≥1 contradicting card |
-| `overturned` | Contradicted and the field's consensus moved | ≥2 contradicting cards, or 1 with reliability ≥ 0.75 |
+| `overturned` | Contradicted and the field's consensus moved | ≥2 cards carrying `relation: "contradicts"`, or 1 such card with reliability ≥ 0.75 |
 | `developed` | Extended, strengthened, generalized | ≥1 `builds_on` card |
 | `varied` | Spawned distinct variants of the mechanism | ≥1 variant card |
 | `repurposed` | Carried to a problem the subject never intended | ≥1 card applying it elsewhere |
@@ -1491,6 +1497,8 @@ Affiliation and venue prestige may additionally order your *reading queue* — r
   "timeline": [{"year": 2019, "event": "confirmed at small scale", "node": "x2019y"},
                {"year": 2022, "event": "failed to replicate at scale", "node": "z2022w"}],
   "evidence": [{"node": "z2022w", "relation": "contradicts", "anchor": "<=15 words"}],
+  // `relation` is load-bearing, not decorative: the fate minimums above count
+  // only entries whose relation says what the card does to the claim.
   "independent_lineage": ["nodes that developed this without citing the subject"],
   "note": "<one sentence a reader can act on>"}}
 ```

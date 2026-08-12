@@ -123,46 +123,23 @@ def sentences(text):
     return [s.strip() for s in SENT_SPLIT.split(text) if len(s.split()) > 2]
 
 
-# §23.0 — single source of truth in mode_defs.py; literal fallback only for
-# a script copied out of the tree alone.
+# The run-state contract lives in state_io.py, copied into every run beside
+# this script. No literal fallbacks: duplicated definitions are what drifted.
 try:
-    from mode_defs import VALID_MODES, NOVELTY_MODES
+    from state_io import (NOVELTY_MODES, load_mode, read_json_object,
+                          id_present)
 except ImportError:
-    VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
-                   "concept", "problem")
-    NOVELTY_MODES = ("fresh", "incremental", "anchored")
-
-
-def id_present(needle, hay):
-    """Word-boundary ID containment. Raw substring lets SOL-1 hide behind
-    SOL-10 and vaswani2017attention behind vaswani2017attention_b. Coerces
-    the needle — agent-written JSON may hold a number where an ID belongs,
-    and that is a defect to report, not a TypeError to die on."""
-    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(str(needle))
-                     + r"(?![A-Za-z0-9_])", hay) is not None
+    sys.exit("[validate_report] state_io.py must sit beside this script "
+             "(init_run.py copies it into the run).")
 
 
 def load_json(path, default=None):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        return default
-
-
-def load_mode(root):
-    """§23.0 — mode.json is the single source of truth; absent = fresh.
-
-    Returns (mode, mode_doc, declared): `declared` is the raw string so an
-    invalid declaration becomes a blocking defect instead of silently
-    disabling every mode-scoped check."""
-    doc = load_json(os.path.join(root, "state", "mode.json"), {})
-    if not isinstance(doc, dict):
-        return "fresh", {}, repr(doc)
-    declared = doc.get("mode", "fresh")
-    if declared not in VALID_MODES:
-        return "fresh", doc, declared
-    return declared, doc, declared
+    """Objects only; a corrupt or wrong-typed state file returns the default
+    AND is reported by the caller — never silently treated as absent."""
+    doc, problems = read_json_object(path)
+    if problems:
+        return default, problems
+    return (doc or default), []
 
 
 def check_readability(md, sections, d, mode="fresh"):
@@ -252,7 +229,9 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
     for cand in (os.path.join(root, "out", "graph.json"),
                  os.path.join(root, "graph", "graph.json")):
         if os.path.exists(cand):
-            graph = load_json(cand)
+            graph, gp = load_json(cand)
+            for problem in gp:
+                d.add("graph_unreadable", cand, problem)
             break
     if graph is None:
         d.add("no_graph", root, "cannot verify completeness without a graph")
@@ -324,7 +303,10 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
               "scripts/recall_check.py (sealed file), --paste <file> "
               "(operator-held list), or --none (no list exists) (§0.1)")
     else:
-        rc = load_json(rc_path, {}) or {}
+        rc, rcp = load_json(rc_path, {})
+        rc = rc or {}
+        for problem in rcp:
+            d.add("recall_check_unreadable", rc_path, problem)
         coverage = sections.get(8, ("", ""))[1]
         verdict = sections.get(0, ("", ""))[1]
         if rc.get("n_missed", 0) > 0:
@@ -383,9 +365,11 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
                             "reading_path_missing",
                             "concept runs must give the foundations → "
                             "canonical → frontier reading path (§23.5)", d)
-        res = load_json(os.path.join(root, "state",
-                                     "concept_resolution.json"), {}) or {}
-        senses = res.get("senses") or []
+        res, resp = load_json(os.path.join(root, "state",
+                                           "concept_resolution.json"), {})
+        for problem in resp:
+            d.add("concept_resolution_unreadable", "state", problem)
+        senses = (res or {}).get("senses") or []
         if len(senses) > 1:
             _require_subsection(md, r"^###\s+Disambiguation\b", "§1",
                                 "disambiguation_missing",
@@ -397,10 +381,21 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
         # unsolved requirements are a headline, not a footnote; the failure
         # museum has a mechanical backstop like every other mode subsection.
         body = sections.get(0, ("", ""))[1]
-        sol_doc = load_json(os.path.join(root, "state", "solutions.json"),
-                            {})
+        sol_doc, solp = load_json(os.path.join(root, "state",
+                                               "solutions.json"), {})
+        for problem in solp:
+            d.add("solutions_unreadable", "state/solutions.json", problem)
         sol_doc = sol_doc if isinstance(sol_doc, dict) else {}
-        sol_ids = [str(i) for i in (sol_doc.get("solutions") or {})]
+        # Ids must be usable strings: an empty or non-string key would make
+        # every downstream match vacuously true.
+        sol_ids = []
+        for i in (sol_doc.get("solutions") or {}):
+            if isinstance(i, str) and i.strip():
+                sol_ids.append(i.strip())
+            else:
+                d.add("solution_id_unusable", repr(i),
+                      "registry key is not a non-empty string; it would "
+                      "match everything in the report checks")
         # The table check is derived from the registry's ACTUAL ids — no
         # naming convention is imposed. An empty or missing registry is a
         # blocking defect, never a skipped check (fail-closed).
@@ -427,12 +422,13 @@ def check_completeness(md, sections, root, d, mode="fresh", mode_doc=None):
                 d.add("unsolved_not_in_verdict", r,
                       "unsolved requirement absent from §0 — that is a "
                       "headline finding (§23.6)")
-        # A museum laid out as a table is a fine museum: count content
-        # words with table cells included (prose_only strips them), only
-        # headings and pipes excluded.
+        # A museum laid out as a table is a fine museum, so table cells
+        # count — but code fences do not (they are not prose an operator
+        # reads), and separator rows are not words.
         sec3 = sections.get(3, ("", ""))[1]
-        content = re.sub(r"^#+.*$", " ", sec3, flags=re.M)
-        content = re.sub(r"^\s*\|[-\s|:]+\|\s*$", " ", content, flags=re.M)
+        content = CODE_FENCE.sub(" ", sec3)
+        content = re.sub(r"^#+.*$", " ", content, flags=re.M)
+        content = re.sub(r"^\s*\|?[-\s|:]+\|?\s*$", " ", content, flags=re.M)
         words = len(content.replace("|", " ").split())
         if words < 30:
             d.add("failure_museum_missing", "§3",
@@ -457,12 +453,11 @@ def main():
 
     d = Defects()
     sections = split_sections(md)
-    mode, mode_doc, declared = load_mode(args.run_root)
-    if declared != mode:
+    mode, mode_doc, mode_problem = load_mode(args.run_root)
+    if mode_problem:
         d.add("mode_invalid", "state/mode.json",
-              f"declared mode {declared!r} is not one of {VALID_MODES}; "
-              "checks ran as fresh, but the declaration itself is a defect "
-              "-- fix mode.json, do not work around it (§23.0)")
+              mode_problem + "  Checks ran as fresh; fix mode.json rather "
+              "than working around it.")
     check_readability(md, sections, d, mode)
     check_completeness(md, sections, args.run_root, d, mode, mode_doc)
 

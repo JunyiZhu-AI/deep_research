@@ -155,39 +155,27 @@ def main():
     args = ap.parse_args()
     root, rnd = args.run_root, args.round
 
-    # Mode list comes from mode_defs.py (fallback for a lone copied script).
-    # An invalid declared mode is WARNED about, never displayed as active:
-    # graph_metrics gates such a run as fresh, and showing the bad string in
-    # the banner would tell the operator the §23 gates are on when they are
-    # not.
+    # One loader for all three scripts (state_io), so a bad declaration
+    # cannot be loud here and silent in the gates. An invalid mode is never
+    # displayed as active: showing it would tell the operator the §23 gates
+    # are on when graph_metrics is running fresh.
     try:
-        from mode_defs import VALID_MODES
+        from state_io import load_mode
     except ImportError:
-        VALID_MODES = ("fresh", "incremental", "anchored", "retrospective",
-                       "concept", "problem")
-    mode_path = os.path.join(root, "state", "mode.json")
-    mode, floors, declared = "fresh", {}, None
-    if os.path.exists(mode_path):
-        try:
-            with open(mode_path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-            if isinstance(doc, dict):
-                declared = doc.get("mode")
-                if declared in VALID_MODES:
-                    mode = declared
-                    floors = doc.get("floors") or {}
-        except (json.JSONDecodeError, OSError):
-            pass
+        print("[round] state_io.py must sit beside these scripts.",
+              file=sys.stderr)
+        return 2
+    mode, mode_doc, mode_problem = load_mode(root)
+    floors = mode_doc.get("floors") or {}
     prospector_start = (floors.get("prospector_start_round", 4)
                         if mode == "incremental" else 8)
 
     print(f"\n=== round {rnd:02d}"
           + (f"  [{mode} — MANUAL §23]" if mode != "fresh" else "") + " ===\n")
-    if declared is not None and declared != mode:
-        print(f"  !! declared mode {declared!r} is NOT a valid mode — the "
-              f"gates are running as FRESH, not as {declared!r}.")
-        print("  !! Fix state/mode.json before continuing (§23.0); the §23 "
-              "mode gates you may be counting on are OFF.\n")
+    if mode_problem:
+        print(f"  !! {mode_problem}")
+        print("  !! Fix state/mode.json before continuing; the §23 mode "
+              "gates you may be counting on are OFF.\n")
 
     print("[1/3] metrics + gates")
     rc, out = run("graph_metrics.py", ["--run-root", root, "--round", str(rnd)],

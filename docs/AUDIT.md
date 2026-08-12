@@ -397,6 +397,19 @@ in it is load-bearing in a way an ordinary README's is not.
   disjoint-author test for `replicated` sees author strings only: the same
   group under different spellings, or serial collaborators publishing
   separately, both evade it.
+- **The validator layer is now ~2,300 lines whose only job is checking an
+  agent's bookkeeping, and that size is itself a risk.** Three review rounds
+  over the mode gates found 15 confirmed defects each, and roughly half of
+  every round's findings were introduced by the previous round's fixes —
+  hardening adds surface, and surface attracts bugs. The third round's
+  response was structural rather than another patch pass: `state_io.py` now
+  validates every state-file shape once at the boundary, so gate logic never
+  touches raw agent JSON, and the mode list, mode loader, and two matching
+  rules each exist exactly once. Whether that converges is unmeasured. If a
+  fourth round again finds bugs in the third round's fixes, the honest
+  conclusion is that the gate layer has outgrown its budget and should be
+  cut back to the few checks that carry real weight (fabrication firewall,
+  proof-of-work floors, recall check) rather than extended again.
 - **Proof-of-search text matching has an irreducible residual.** After the
   second review round, a query tagged for one target no longer text-credits
   a different one, and matching is word-boundary with underscores. What
